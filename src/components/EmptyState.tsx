@@ -5,7 +5,21 @@ import { Logo } from './Logo';
 
 export function EmptyState() {
   const loading = useStore((s) => s.loading);
+  const recent = useStore((s) => s.recentFiles);
   const [over, setOver] = useState(false);
+
+  const bridge = (window as any).jmaster;
+  const canRecent = !!bridge?.readFileByPath && recent.length > 0;
+
+  const openRecent = async (r: { name: string; path: string }) => {
+    try {
+      const bytes: ArrayBuffer = await bridge.readFileByPath(r.path);
+      await useStore.getState().loadFile(bytes, r.name, r.path);
+    } catch {
+      useStore.getState().pushToast(`NOT FOUND · ${r.name.toUpperCase()}`, 'fault');
+      useStore.getState().pruneRecentFile(r.path);
+    }
+  };
 
   return (
     <div className="empty">
@@ -36,6 +50,21 @@ export function EmptyState() {
         <div className="spec" style={{ opacity: 0.7 }}>
           ANY GENERATOR, ANY DAW, ANY WAV · EVERYTHING PROCESSED ON THIS MACHINE
         </div>
+        {canRecent && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginTop: 8 }}>
+            <span className="spec" style={{ opacity: 0.55 }}>RECENT</span>
+            {recent.map((r) => (
+              <button
+                key={r.path}
+                className="btn btn-sm"
+                disabled={loading}
+                style={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={r.path}
+                onClick={() => void openRecent(r)}
+              >{r.name}</button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

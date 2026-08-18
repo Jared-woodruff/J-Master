@@ -374,6 +374,15 @@ export class AudioEngine {
     this.node?.port.postMessage({ type: 'seek', sample: sec * TARGET_RATE });
   }
 
+  /** Loops playback over [startSec, endSec); null clears the loop. */
+  setLoop(startSec: number | null, endSec: number | null): void {
+    this.node?.port.postMessage(
+      startSec === null || endSec === null
+        ? { type: 'loop', start: null, end: null }
+        : { type: 'loop', start: startSec * TARGET_RATE, end: endSec * TARGET_RATE },
+    );
+  }
+
   /** Fills spectrumData with the current byte frequency data; returns it. */
   readSpectrum(): Uint8Array {
     if (this.analyser) this.analyser.getByteFrequencyData(this.spectrumData);

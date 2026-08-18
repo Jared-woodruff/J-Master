@@ -277,6 +277,12 @@ interface JMasterState {
   source: SourceInfo | null;
   /** Filesystem path of the loaded audio (Electron), for project files. */
   trackPath: string | null;
+  /** Playback loop region (session-only). */
+  loopStartSec: number | null;
+  loopEndSec: number | null;
+  /** Recently loaded audio files (Electron only: needs a filesystem path). */
+  recentFiles: { name: string; path: string }[];
+  keysOpen: boolean;
 
   macros: MacroValues;
   presetId: string | null;
@@ -398,6 +404,10 @@ interface JMasterState {
   togglePlay(): void;
   stop(): void;
   seekSec(sec: number): void;
+  /** Loops the section at `atSec` (default: playhead); same section again clears. */
+  toggleLoop(atSec?: number): void;
+  pruneRecentFile(path: string): void;
+  openKeys(open: boolean): void;
   setTheme(theme: 'plate' | 'paper'): void;
   setWaveView(view: 'wave' | 'spec'): void;
   openExport(open: boolean): void;
@@ -593,6 +603,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     loadError: null,
     source: null,
     trackPath: null,
+    loopStartSec: null,
+    loopEndSec: null,
+    recentFiles: [],
+    keysOpen: false,
 
     macros: { tone: 0, shape: 0, air: 0, smooth: 0, character: 0, density: 0, impact: 0, width: 1 },
     presetId: 'flat',
@@ -681,9 +695,16 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         set({
           loaded: true, loading: false, source, trackPath: path,
           playing: false, playheadSec: 0,
+          loopStartSec: null, loopEndSec: null,
           tempo: null, balanceDb: 0, bassMono: false, metronome: false,
           diagIssues: issues, diagChecks: checks, diagOpen: false,
         });
+        document.title = `${name} · J-Master`;
+        if (path) {
+          set((st) => ({
+            recentFiles: [{ name, path }, ...st.recentFiles.filter((r) => r.path !== path)].slice(0, 6),
+          }));
+        }
         pushParams(get);
         get().pushToast(`LOADED ${name.toUpperCase()}`, 'run');
         const skipDiag = suppressDiagOnce;
@@ -1326,6 +1347,39 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       set({ playheadSec: sec });
     },
 
+    toggleLoop(atSec) {
+      const s = get();
+      if (!s.loaded || !s.source) return;
+      const pos = atSec ?? s.playheadSec;
+      let start = 0;
+      let end = s.source.durationSec;
+      let label = 'TRACK';
+      const sect = (s.tempo?.sections ?? []).find((x) => pos >= x.startSec && pos < x.endSec);
+      if (sect) { start = sect.startSec; end = sect.endSec; label = sect.label; }
+      const same =
+        s.loopStartSec !== null &&
+        Math.abs(s.loopStartSec - start) < 0.01 &&
+        Math.abs((s.loopEndSec ?? 0) - end) < 0.01;
+      if (same) {
+        engine.setLoop(null, null);
+        set({ loopStartSec: null, loopEndSec: null });
+        get().pushToast('LOOP OFF', 'info');
+      } else {
+        engine.setLoop(start, end);
+        set({ loopStartSec: start, loopEndSec: end });
+        const fmt = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, '0')}`;
+        get().pushToast(`LOOP · ${label} ${fmt(start)}-${fmt(end)}`, 'run');
+      }
+    },
+
+    pruneRecentFile(path) {
+      set((s) => ({ recentFiles: s.recentFiles.filter((r) => r.path !== path) }));
+    },
+
+    openKeys(open) {
+      set({ keysOpen: open });
+    },
+
     setTheme(theme) {
       document.documentElement.setAttribute('data-theme', theme);
       set({ theme });
@@ -1636,6 +1690,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     gridEnabled: s.gridEnabled,
     loudnessLane: s.loudnessLane,
     outSplit: s.outSplit,
+    recentFiles: s.recentFiles,
     activeSlot: s.activeSlot,
     snapshots: s.snapshots,
     autoFix: s.autoFix,

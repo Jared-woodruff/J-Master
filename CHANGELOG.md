@@ -13,6 +13,15 @@
   before/after difference is visible at a glance.
 - Keyboard: arrow keys seek 5 s (Shift: 30 s), R toggles the
   loudness-matched reference, A switches the A/B snapshot slot.
+- **Section loop:** L (or double-click the waveform) loops the detected
+  section under the cursor, sample-seamless, for tweaking the console
+  against one passage; LOOP button in the wave controls, region marked
+  on the timeline.
+- **Recent files** on the open screen (desktop app): the last six tracks
+  reload with one click.
+- Hovering the waveform shows the time and short-term loudness under the
+  cursor; ? opens a keyboard cheat sheet (also KEYS in the status bar);
+  the window title carries the track name.
 
 ## 2.2.2
 - Broaden the messaging: J-Master masters output from any AI music

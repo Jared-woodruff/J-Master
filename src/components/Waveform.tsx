@@ -75,6 +75,8 @@ export function Waveform() {
   const setProcessedView = useStore((s) => s.setProcessedView);
   const outSplit = useStore((s) => s.outSplit);
   const setOutSplit = useStore((s) => s.setOutSplit);
+  const loopOn = useStore((s) => s.loopStartSec !== null);
+  const toggleLoop = useStore((s) => s.toggleLoop);
 
   // Compute the spectrogram lazily the first time SPEC is selected.
   useEffect(() => {
@@ -450,6 +452,46 @@ export function Waveform() {
       drawHandle(fi, fi > 0);
       drawHandle(d - fo, fo > 0);
 
+      // loop region: boundary rules + a band on the ruler
+      if (st.loopStartSec !== null && st.loopEndSec !== null) {
+        const lx0 = secToX(st.loopStartSec);
+        const lx1 = secToX(st.loopEndSec);
+        ctx.fillStyle = colSignal;
+        ctx.globalAlpha = 0.8;
+        if (lx0 >= 0 && lx0 <= w) ctx.fillRect(lx0, topY, 1, waveH);
+        if (lx1 >= 0 && lx1 <= w) ctx.fillRect(lx1 - 1, topY, 1, waveH);
+        ctx.globalAlpha = 0.16;
+        ctx.fillRect(Math.max(0, lx0), h - RULER_H + 1, Math.min(w, lx1) - Math.max(0, lx0), RULER_H - 1);
+        ctx.globalAlpha = 1;
+        if (lx0 < w && lx1 > 0) {
+          ctx.font = `8px 'IBM Plex Mono', monospace`;
+          ctx.textBaseline = 'top';
+          ctx.fillText('LOOP', Math.max(2, lx0) + 4, topY + 2);
+        }
+      }
+
+      // hover readout: time (+ short-term LUFS when the lane is computed)
+      if (hoverX.current !== null && dragMode.current === null && !specMode) {
+        const sec = v.start + (hoverX.current / w) * viewLen;
+        const mm = Math.floor(sec / 60);
+        const ss = (sec % 60).toFixed(1).padStart(4, '0');
+        let text = `${mm}:${ss}`;
+        const hLane = engine.loudnessLane;
+        if (hLane && hLane.values.length > 1) {
+          const idx = Math.max(0, Math.min(hLane.values.length - 1, Math.round(sec / hLane.stepSec)));
+          const lv = hLane.values[idx];
+          if (lv > -60) text += ` · ${lv.toFixed(1)} LUFS`;
+        }
+        ctx.font = `9px 'IBM Plex Mono', monospace`;
+        ctx.textBaseline = 'top';
+        const tw = ctx.measureText(text).width;
+        const tx = hoverX.current + 6 + tw > w ? hoverX.current - tw - 6 : hoverX.current + 6;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(tx - 3, topY + 2, tw + 6, 13);
+        ctx.fillStyle = '#FBFAF7';
+        ctx.fillText(text, tx, topY + 4);
+      }
+
       // playhead (paper-white over the spectrogram so it stays visible)
       if (playX >= 0 && playX <= w) {
         ctx.fillStyle = specMode ? '#FBFAF7' : colSignal;
@@ -603,6 +645,11 @@ export function Waveform() {
     };
     const onUp = () => { dragMode.current = null; };
     const onLeave = () => { hoverX.current = null; };
+    const onDbl = (e: MouseEvent) => {
+      const y = e.clientY - rect().top;
+      if (isZoomed() && y <= OVERVIEW_H + 1) return;
+      st().toggleLoop(secAt(e.clientX));
+    };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const r = rect();
@@ -620,12 +667,14 @@ export function Waveform() {
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerup', onUp);
     canvas.addEventListener('pointerleave', onLeave);
+    canvas.addEventListener('dblclick', onDbl);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     return () => {
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointerleave', onLeave);
+      canvas.removeEventListener('dblclick', onDbl);
       canvas.removeEventListener('wheel', onWheel);
     };
   }, [source]);
@@ -665,6 +714,9 @@ export function Waveform() {
               title="Split compare: source above, master below"
               onClick={() => setOutSplit(!outSplit)}>SPLIT</button>
           )}
+          <button className={loopOn ? 'on' : ''}
+            title="Loop the section under the playhead (L) · double-click the wave to loop a section"
+            onClick={() => toggleLoop()}>LOOP</button>
           <button title="Zoom out (wheel)" onClick={() => zoomBy(1.6)}>−</button>
           <button title="Zoom in (wheel)" onClick={() => zoomBy(1 / 1.6)}>+</button>
           <button title="Fit whole track" onClick={() => clampView(0, dur())} disabled={!zoomed}>FIT</button>

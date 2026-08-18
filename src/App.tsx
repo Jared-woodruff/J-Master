@@ -14,6 +14,7 @@ import { MasterItReport } from './components/MasterItReport';
 import { AlbumDialog } from './components/AlbumDialog';
 import { Toasts } from './components/Toasts';
 import { EmptyState } from './components/EmptyState';
+import { KeysDialog } from './components/KeysDialog';
 import { loadDroppedFile } from './lib/filepick';
 
 export function App() {
@@ -22,7 +23,7 @@ export function App() {
   const setTheme = useStore((s) => s.setTheme);
 
   // Space = play/pause, Home = start, ←/→ = seek 5 s (Shift = 30 s),
-  // R = reference, A = A/B slot, E = export,
+  // L = loop section, R = reference, A = A/B slot, E = export, ? = keys,
   // Ctrl+S/O = save/open project, Ctrl+Z/Y = undo/redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -51,12 +52,16 @@ export function App() {
         const step = (e.shiftKey ? 30 : 5) * (e.code === 'ArrowLeft' ? -1 : 1);
         const d = s.source?.durationSec ?? 0;
         s.seekSec(Math.max(0, Math.min(d, s.playheadSec + step)));
+      } else if (e.key === 'l' || e.key === 'L') {
+        if (s.loaded) s.toggleLoop();
       } else if (e.key === 'r' || e.key === 'R') {
         if (s.loaded) s.setBypass(!s.bypass);
       } else if (e.key === 'a' || e.key === 'A') {
         if (s.loaded) s.switchSlot(s.activeSlot === 'A' ? 'B' : 'A');
       } else if (e.key === 'e' || e.key === 'E') {
         if (s.loaded) s.openExport(true);
+      } else if (e.key === '?') {
+        s.openKeys(!s.keysOpen);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -113,6 +118,9 @@ export function App() {
         <span className="spec" style={{ opacity: 0.6 }}>MUSIC, MANUFACTURED.</span>
         <span className="grow" />
         <span className="spec">ENGINE 48K / 32-BIT FLOAT</span>
+        <div className="theme-switch">
+          <button onClick={() => useStore.getState().openKeys(true)} title="Keyboard shortcuts (?)">KEYS</button>
+        </div>
         <div className="theme-switch" role="group" aria-label="Theme">
           <button className={theme === 'plate' ? 'on' : ''} onClick={() => setTheme('plate')}>PLATE</button>
           <button className={theme === 'paper' ? 'on' : ''} onClick={() => setTheme('paper')}>PAPER</button>
@@ -124,6 +132,7 @@ export function App() {
       <MatchDialog />
       <MasterItReport />
       <AlbumDialog />
+      <KeysDialog />
       <Toasts />
     </div>
   );

@@ -23,6 +23,8 @@ class JMasterProcessor extends AudioWorkletProcessor {
   private srcR: Float32Array | null = null;
   private playing = false;
   private playhead = 0;
+  private loopStart = -1;
+  private loopEnd = -1;   // loop active when loopEnd > loopStart >= 0
   private params: ChainParams = defaultParams();
   private meterCountdown = METER_INTERVAL;
   private framePeak = 0;
@@ -59,8 +61,21 @@ class JMasterProcessor extends AudioWorkletProcessor {
         this.srcR = new Float32Array(msg.r);
         this.playhead = 0;
         this.playing = false;
+        this.loopStart = -1;
+        this.loopEnd = -1;
         this.chain.reset();
         this.meter.reset();
+        break;
+      case 'loop':
+        if (msg.start === null || msg.end === null) {
+          this.loopStart = -1;
+          this.loopEnd = -1;
+        } else {
+          const len = this.srcL ? this.srcL.length : 0;
+          this.loopStart = Math.max(0, Math.round(msg.start));
+          this.loopEnd = Math.min(len, Math.round(msg.end));
+          if (this.loopEnd <= this.loopStart) { this.loopStart = -1; this.loopEnd = -1; }
+        }
         break;
       case 'params':
         this.params = msg.params;
@@ -110,12 +125,23 @@ class JMasterProcessor extends AudioWorkletProcessor {
     const srcL = this.srcL, srcR = this.srcR;
     const total = srcL.length;
     const start = this.playhead;
-    const avail = Math.min(n, total - start);
-    for (let i = 0; i < avail; i++) {
-      outL[i] = srcL[start + i];
-      outR[i] = srcR[start + i];
+    // Copy source, wrapping seamlessly at the loop point mid-block if needed.
+    const loopOn = this.loopStart >= 0 && this.loopEnd > this.loopStart;
+    let pos = start;
+    let written = 0;
+    while (written < n) {
+      const limit = loopOn && pos < this.loopEnd ? this.loopEnd : total;
+      const chunk = Math.min(n - written, limit - pos);
+      if (chunk <= 0) break; // end of track
+      for (let i = 0; i < chunk; i++) {
+        outL[written + i] = srcL[pos + i];
+        outR[written + i] = srcR[pos + i];
+      }
+      written += chunk;
+      pos += chunk;
+      if (loopOn && pos >= this.loopEnd) pos = this.loopStart;
     }
-    for (let i = avail; i < n; i++) { outL[i] = 0; outR[i] = 0; }
+    for (let i = written; i < n; i++) { outL[i] = 0; outR[i] = 0; }
 
     if (preL && preR) {
       const g = dbToLin(this.params.stagingGainDb + this.params.refOutputGainDb);
@@ -126,7 +152,7 @@ class JMasterProcessor extends AudioWorkletProcessor {
     }
 
     this.chain.processBlock(outL, outR, 0, n, start);
-    this.playhead = start + avail;
+    this.playhead = pos;
 
     // Metering on the processed output.
     this.meter.processBlock(outL, outR, 0, n);
@@ -141,7 +167,7 @@ class JMasterProcessor extends AudioWorkletProcessor {
     this.corrLL += this.corrCoef * (ll - this.corrLL);
     this.corrRR += this.corrCoef * (rr - this.corrRR);
 
-    if (this.playhead >= total) {
+    if (this.playhead >= total && written < n) {
       this.playing = false;
       this.port.postMessage({ type: 'ended' });
     }
