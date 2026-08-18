@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+- **Fix: SMOOTH and BALANCE were silent in the real-time preview.** Their
+  slewed values were never advanced in the live chain, so the knobs (and
+  the HARSH HIGHS / AUTO-CENTER diag fixes) only took effect in exports.
+  Preview and export are numerically identical again.
+- **GR·S meter:** live de-harsh gain reduction, above GR·C / GR·L.
+- The diagnosis sheet now marks fixes the console already covers as
+  APPLIED instead of re-offering them.
+
 ## 2.2.2
 - Broaden the messaging: J-Master masters output from any AI music
   generator (SUNO, Udio, Riffusion, local models) and any WAV at all,

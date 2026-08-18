@@ -56,6 +56,7 @@ export function MetersPanel() {
 
         <div className="meter-sep" />
 
+        <MeterLine label="GR·S" value={m ? `-${m.deharshGrDb.toFixed(1)}` : '—'} pct={m ? Math.min(100, (m.deharshGrDb / 6) * 100) : 0} warn />
         <MeterLine label="GR·C" value={m ? `-${m.compGrDb.toFixed(1)}` : '—'} pct={m ? Math.min(100, (m.compGrDb / 12) * 100) : 0} warn />
         <MeterLine label="GR·L" value={m ? `-${m.limiterGrDb.toFixed(1)}` : '—'} pct={m ? Math.min(100, (m.limiterGrDb / 12) * 100) : 0} warn />
 

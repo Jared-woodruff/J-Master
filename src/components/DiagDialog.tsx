@@ -5,6 +5,7 @@
 // and the per-platform delivery table. Nothing is ever applied silently
 // unless the user has armed AUTO-FIX.
 import { useStore } from '../state/store';
+import type { DiagIssue } from '../state/store';
 import { PLATFORMS } from '../audio/dsp/params';
 
 export function DiagDialog() {
@@ -18,12 +19,30 @@ export function DiagDialog() {
   const setAutoFix = useStore((s) => s.setAutoFix);
   const applyDiagFixes = useStore((s) => s.applyDiagFixes);
   const targetLufs = useStore((s) => s.targetLufs);
+  const macros = useStore((s) => s.macros);
+  const bassMono = useStore((s) => s.bassMono);
+  const balanceDb = useStore((s) => s.balanceDb);
 
   if (!open || !source) return null;
 
+  // A fix counts as applied while the console state still covers it, so
+  // reopening the sheet reports what is already handled instead of
+  // silently re-offering it.
+  const fixApplied = (i: DiagIssue): boolean => {
+    switch (i.action.type) {
+      case 'bassMono': return bassMono;
+      case 'width': return macros.width <= i.action.value + 0.005;
+      case 'smooth': return macros.smooth >= i.action.value - 0.005;
+      case 'balance': {
+        const wanted = Math.max(-3, Math.min(3, +(-source.balanceOffsetDb).toFixed(1)));
+        return Math.abs(balanceDb - wanted) <= 0.05;
+      }
+    }
+  };
+
   const plr = source.truePeakDb - source.lufs;
 
-  const anyChecked = issues.some((i) => i.checked);
+  const anyChecked = issues.some((i) => i.checked && !fixApplied(i));
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) openDiag(false); }}>
@@ -57,17 +76,26 @@ export function DiagDialog() {
             </div>
             <div className="statgrid">
               {issues.map((i) => (
-                <label className="row" key={i.id} style={{ alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={i.checked}
-                    onChange={() => toggleDiagIssue(i.id)}
-                    style={{ accentColor: 'var(--signal-500)', width: 13, height: 13 }}
-                  />
-                  <span className="spec" style={{ color: 'var(--text-body)' }}>{i.label}</span>
-                  <span className="leader" />
-                  <span className="spec-value" style={{ fontSize: 11, color: 'var(--text-accent)' }}>{i.fixLabel}</span>
-                </label>
+                fixApplied(i) ? (
+                  <div className="row" key={i.id} style={{ alignItems: 'center', gap: 8 }}>
+                    <span className="lamp run" />
+                    <span className="spec" style={{ color: 'var(--text-body)' }}>{i.label}</span>
+                    <span className="leader" />
+                    <span className="spec-value" style={{ fontSize: 11 }}>{i.fixLabel} · APPLIED</span>
+                  </div>
+                ) : (
+                  <label className="row" key={i.id} style={{ alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={i.checked}
+                      onChange={() => toggleDiagIssue(i.id)}
+                      style={{ accentColor: 'var(--signal-500)', width: 13, height: 13 }}
+                    />
+                    <span className="spec" style={{ color: 'var(--text-body)' }}>{i.label}</span>
+                    <span className="leader" />
+                    <span className="spec-value" style={{ fontSize: 11, color: 'var(--text-accent)' }}>{i.fixLabel}</span>
+                  </label>
+                )
               ))}
             </div>
           </>

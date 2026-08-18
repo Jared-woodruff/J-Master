@@ -14,6 +14,7 @@ export interface MeterFrame {
   truePeakDb: number;
   compGrDb: number;
   limiterGrDb: number;
+  deharshGrDb: number;
   correlation: number;
 }
 
@@ -181,7 +182,7 @@ export class AudioEngine {
             playhead: this.srcL ? this.srcL.length : 0,
             playing: false, idle: false,
             momentary: -70, shortTerm: -70, integrated: -70,
-            truePeakDb: -70, compGrDb: 0, limiterGrDb: 0, correlation: 1,
+            truePeakDb: -70, compGrDb: 0, limiterGrDb: 0, deharshGrDb: 0, correlation: 1,
           });
         }
       }

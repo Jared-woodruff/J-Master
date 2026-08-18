@@ -39,6 +39,7 @@ class Slewed {
 export interface ChainMeters {
   compGrDb: number;
   limiterGrDb: number;
+  deharshGrDb: number;
 }
 
 export class MasterChain {
@@ -159,7 +160,7 @@ export class MasterChain {
   }
 
   get meters(): ChainMeters {
-    return { compGrDb: this.comp.grDb, limiterGrDb: this.limiter.grDb };
+    return { compGrDb: this.comp.grDb, limiterGrDb: this.limiter.grDb, deharshGrDb: this.deharsh.grDb };
   }
 
   /** Rebuilds the match/advanced EQ banks only when their specs change. */
@@ -251,7 +252,9 @@ export class MasterChain {
     dynDirty = this.density.tick() || dynDirty;
     dynDirty = this.impact.tick() || dynDirty;
     dynDirty = this.width.tick() || dynDirty;
+    dynDirty = this.smooth.tick() || dynDirty;
     if (dynDirty) this.applyDynamics();
+    this.balance.tick();
     this.stagingGain.tick();
     this.outputGain.tick();
     this.refGain.tick();

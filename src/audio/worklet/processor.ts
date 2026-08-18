@@ -198,6 +198,7 @@ class JMasterProcessor extends AudioWorkletProcessor {
       truePeakDb: 20 * Math.log10(Math.max(this.framePeak, 1e-10)),
       compGrDb: meters.compGrDb,
       limiterGrDb: meters.limiterGrDb,
+      deharshGrDb: meters.deharshGrDb,
       correlation: denom > 1e-9 ? this.corrLR / denom : 1,
     });
     this.framePeak = 0;
