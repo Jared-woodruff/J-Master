@@ -6,5 +6,8 @@ public/audio/jmaster-*.js
 public/test-song.wav
 *.log
 
+# Local test audio dropped in the project root
+/*.wav
+
 # Internal Jamware Records brand material — not part of the public repo
 design-handoff/
