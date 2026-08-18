@@ -13,9 +13,9 @@
   the architecture.
 
 ## 2.2.0
-- **STEM LANES:** bass / drums / vocal / air component trims O±3 dB),
+- **STEM LANES:** bass / drums / vocal / air component trims (±3 dB),
   phase-coherent subtractive extraction.
-- **Album / CD assembly:** 44.1 kHz/16-bit image WAV Oframe-aligned,
+- **Album / CD assembly:** 44.1 kHz/16-bit image WAV (frame-aligned,
   streamed to disk) + CUE with CD-TEXT, per-track ISRC, album UPC; batch
   queue reordering.
 - **Codec audition:** loop the loudest section, A/B encoded vs lossless.
@@ -60,7 +60,7 @@
 
 ## 1.2.0
 - FLAC **stereo decorrelation + partitioned Rice**; **LIM Δ** delta monitor;
-  release **metadata tags** ORIFF INFO / Vorbis comment / ID3v2.3).
+  release **metadata tags** (RIFF INFO / Vorbis comment / ID3v2.3).
 
 ## 1.1.0
 - Waveform **zoom/pan** with peak pyramid; before/after **spectrum overlay**;
