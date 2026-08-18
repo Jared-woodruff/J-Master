@@ -1,0 +1,75 @@
+{
+  "name": "j-master",
+  "productName": "J-Master",
+  "version": "2.3.0",
+  "description": "J-Master — mastering console for the AI music era. Load a WAV, shape it, ship it. By JMW Software for Jamware Records.",
+  "author": "JMW Software (https://www.jmwsoftware.com.au)",
+  "homepage": "https://www.jmwsoftware.com.au",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "main": "dist-electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "audio:build": "node scripts/build-audio.mjs",
+    "electron:build": "node scripts/build-electron.mjs",
+    "dev": "npm run audio:build && vite",
+    "dev:app": "npm run audio:build && npm run electron:build && node scripts/dev-app.mjs",
+    "build": "npm run audio:build && npm run electron:build && vite build",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:arm64": "npm run build && electron-builder --win --arm64",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0"
+  },
+  "build": {
+    "appId": "au.com.jmwsoftware.jmaster",
+    "productName": "J-Master",
+    "copyright": "Copyright © 2026 JMW Software / Jamware Records",
+    "directories": {
+      "output": "release",
+      "buildResources": "buildResources"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/test-song.wav",
+      "dist-electron/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "buildResources/icon.ico"
+    },
+    "fileAssociations": [
+      {
+        "ext": "jmaster",
+        "name": "J-Master project",
+        "description": "J-Master mastering session",
+        "icon": "buildResources/icon.ico"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "J-Master-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "J-Master-${version}-portable-${arch}.${ext}"
+    }
+  }
+}

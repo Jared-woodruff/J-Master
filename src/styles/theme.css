@@ -1,0 +1,282 @@
+/* J-Master — Jamware Records design language.
+   "Music, manufactured." Paper & graphite, one signal orange, square corners,
+   hairline structure, mono spec labels, mechanical motion. */
+
+/* Fonts are linked from index.html (public/fonts/fonts.css) so relative
+   paths survive both the dev server and the packaged file:// load. */
+
+:root {
+  /* graphite ramp (machine ink) */
+  --graphite-950: #0D0E10;
+  --graphite-900: #17191C;
+  --graphite-850: #1C1F23;
+  --graphite-800: #222528;
+  --graphite-700: #33373C;
+  --graphite-600: #4A4F55;
+  --graphite-500: #63696F;
+  --graphite-400: #878D93;
+  --graphite-300: #AFB3B8;
+  --graphite-200: #D6D8DA;
+  --graphite-100: #E8E9EA;
+
+  /* primer (paper) */
+  --paper: #FBFAF7;
+  --primer-50: #F5F4F0;
+  --primer-100: #EFEEE9;
+  --primer-200: #E4E2DB;
+
+  /* signal orange (the one accent) */
+  --signal-600: #D93F00;
+  --signal-500: #FF4D00;
+  --signal-400: #FF6A26;
+  --signal-100: #FFE3D6;
+  --signal-50: #FFF1EA;
+
+  /* status lamps */
+  --run-500: #1F9D55;
+  --warn-500: #E8A200;
+  --fault-500: #D6331F;
+
+  /* corners: square; 2px only on small controls */
+  --radius-0: 0;
+  --radius-1: 2px;
+
+  --shadow-overlay: 0 24px 48px -12px rgba(13, 14, 16, 0.45);
+
+  --ease-mech: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --press-shift: 1px;
+
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+
+  --control-h-sm: 28px;
+  --control-h-md: 36px;
+  --control-h-lg: 44px;
+
+  --font-display: 'Archivo', system-ui, sans-serif;
+  --font-body: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --display-stretch: 125%;
+
+  --text-title: 26px;
+  --text-heading: 19px;
+  --text-body-size: 14px;
+  --text-small: 13px;
+  --text-spec-size: 11px;
+  --tracking-spec: 0.14em;
+}
+
+/* ── PLATE theme (default): the mastering floor at night ─────────────── */
+:root, :root[data-theme='plate'] {
+  --surface-page: var(--graphite-950);
+  --surface-raised: var(--graphite-900);
+  --surface-inset: #101215;
+  --surface-well: #0A0B0D;          /* waveform / meter wells */
+  --surface-control: var(--graphite-850);
+
+  --text-body: var(--paper);
+  --text-secondary: var(--graphite-300);
+  --text-spec: var(--graphite-400);
+  --text-disabled: var(--graphite-600);
+  --text-accent: var(--signal-500);
+
+  --border-hairline: #26292E;
+  --border-mid: var(--graphite-700);
+  --border-strong: var(--paper);
+  --focus-ring: var(--signal-500);
+
+  --fill-primary: var(--paper);
+  --fill-primary-hover: var(--graphite-200);
+  --fill-primary-text: var(--graphite-950);
+  --fill-accent: var(--signal-500);
+  --fill-accent-hover: var(--signal-600);
+
+  --wave-bar: #3D4248;
+  --wave-rms: #565B61;
+  --wave-played: var(--signal-500);
+  --meter-track: #1A1D21;
+}
+
+/* ── PAPER theme: the spec sheet ─────────────────────────────────────── */
+:root[data-theme='paper'] {
+  --surface-page: var(--paper);
+  --surface-raised: #FFFFFF;
+  --surface-inset: var(--primer-100);
+  --surface-well: var(--graphite-950);
+  --surface-control: #FFFFFF;
+
+  --text-body: var(--graphite-900);
+  --text-secondary: var(--graphite-600);
+  --text-spec: var(--graphite-500);
+  --text-disabled: var(--graphite-400);
+  --text-accent: var(--signal-600);
+
+  --border-hairline: var(--graphite-200);
+  --border-mid: var(--graphite-300);
+  --border-strong: var(--graphite-950);
+  --focus-ring: var(--signal-500);
+
+  --fill-primary: var(--graphite-950);
+  --fill-primary-hover: var(--graphite-700);
+  --fill-primary-text: var(--paper);
+  --fill-accent: var(--signal-500);
+  --fill-accent-hover: var(--signal-600);
+
+  --wave-bar: #3D4248;
+  --wave-rms: #565B61;
+  --wave-played: var(--signal-500);
+  --meter-track: #1A1D21;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-body-size);
+  line-height: 1.5;
+  color: var(--text-body);
+  background: var(--surface-page);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+::selection { background: var(--signal-500); color: #fff; }
+
+button {
+  font-family: var(--font-body);
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+input, select {
+  font-family: var(--font-mono);
+  color: var(--text-body);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-1);
+}
+
+/* ── shared primitives ───────────────────────────────────────────────── */
+
+.spec {
+  font-family: var(--font-mono);
+  font-size: var(--text-spec-size);
+  letter-spacing: var(--tracking-spec);
+  text-transform: uppercase;
+  color: var(--text-spec);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.spec-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-body);
+  white-space: nowrap;
+}
+
+.display {
+  font-family: var(--font-display);
+  font-stretch: var(--display-stretch);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.015em;
+  line-height: 0.98;
+}
+
+.leader {
+  flex: 1;
+  border-bottom: 1px dotted var(--border-mid);
+  margin: 0 6px;
+  transform: translateY(-3px);
+}
+
+.lamp {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--graphite-600);
+  flex: none;
+}
+.lamp.run { background: var(--run-500); }
+.lamp.warn { background: var(--warn-500); }
+.lamp.fault { background: var(--fault-500); }
+.lamp.signal { background: var(--signal-500); }
+
+/* frame with registration crosshairs */
+.frame {
+  position: relative;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+}
+.frame .xh {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--graphite-500);
+  pointer-events: none;
+  z-index: 2;
+}
+.frame .xh.tl { top: -7px; left: -4px; }
+.frame .xh.tr { top: -7px; right: -4px; }
+.frame .xh.bl { bottom: -7px; left: -4px; }
+.frame .xh.br { bottom: -7px; right: -4px; }
+
+/* buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--control-h-md);
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--radius-0);
+  border: 1px solid transparent;
+  transition: background var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
+}
+.btn:active:not(:disabled) { transform: translateY(var(--press-shift)); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary { background: var(--fill-primary); color: var(--fill-primary-text); }
+.btn-primary:hover:not(:disabled) { background: var(--fill-primary-hover); }
+.btn-accent { background: var(--fill-accent); color: #fff; }
+.btn-accent:hover:not(:disabled) { background: var(--fill-accent-hover); }
+.btn-secondary { background: transparent; color: var(--text-body); border-color: var(--border-mid); }
+.btn-secondary:hover:not(:disabled) { background: var(--surface-inset); }
+.btn-ghost { background: transparent; color: var(--text-secondary); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-inset); color: var(--text-body); }
+
+.btn-sm { height: var(--control-h-sm); padding: 0 12px; font-size: 13px; }
+.btn-lg { height: var(--control-h-lg); padding: 0 24px; font-size: 15px; }
+
+/* toggle chip that reads as "engaged" with the signal lamp */
+.btn-toggle { border-color: var(--border-mid); color: var(--text-secondary); background: transparent; }
+.btn-toggle:hover:not(:disabled) { background: var(--surface-inset); color: var(--text-body); }
+.btn-toggle.on { border-color: var(--signal-500); color: var(--text-body); }
+
+/* mechanical scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-mid); border: 2px solid var(--surface-page); }
+::-webkit-scrollbar-thumb:hover { background: var(--graphite-500); }
