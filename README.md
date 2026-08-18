@@ -9,8 +9,10 @@
   <img alt="Codecs: in-house" src="https://img.shields.io/badge/FLAC%20%2B%20Ogg%20Opus%20muxer-written%20in--house-FBFAF7?style=flat-square&labelColor=0D0E10"/>
 </p>
 
-**J-Master** turns a raw AI-generated track (a SUNO export, a bounce, any WAV) into a
-release-ready master. Load it, and the console tells you the tempo, the song's
+**J-Master** turns a raw track into a release-ready master. It was built for
+the output of AI music generators (SUNO, Udio, Riffusion, or local models
+like MusicGen and Stable Audio) but it masters any WAV from any source, DAW
+bounces included. Load it, and the console tells you the tempo, the song's
 sections, where it runs hot, and what's wrong with it. Shape it with eight
 macro processors, or press one button and watch the analysis do it, with
 every decision shown. Export at an exactly-solved loudness for any streaming

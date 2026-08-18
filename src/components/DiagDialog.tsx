@@ -1,5 +1,6 @@
-// TRACK DIAGNOSIS — the source check sheet. Runs at load; flags SUNO
-// pathologies (bass in sides, unstable width, image lean, harsh highs) with
+// TRACK DIAGNOSIS — the source check sheet. Runs at load; flags common
+// AI-music pathologies (bass in sides, unstable width, image lean, harsh
+// highs) with
 // measured values and one-click fixes, plus the dynamics report (PLR/LRA)
 // and the per-platform delivery table. Nothing is ever applied silently
 // unless the user has armed AUTO-FIX.

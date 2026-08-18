@@ -31,7 +31,7 @@ export interface SourceInfo {
   samplePeakDb: number;
   /** L/R RMS imbalance in dB; positive = right louder. */
   balanceOffsetDb: number;
-  /** Source pathology measurements (SUNO checks). */
+  /** Source pathology measurements (AI-music checks). */
   diagnostics: SourceDiagnostics;
 }
 

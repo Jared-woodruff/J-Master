@@ -34,7 +34,7 @@ export function EmptyState() {
           {loading ? 'ANALYSING…' : 'OPEN FILE'}
         </button>
         <div className="spec" style={{ opacity: 0.7 }}>
-          SUNO EXPORTS WELCOME · EVERYTHING PROCESSED ON THIS MACHINE
+          ANY GENERATOR, ANY DAW, ANY WAV · EVERYTHING PROCESSED ON THIS MACHINE
         </div>
       </div>
     </div>

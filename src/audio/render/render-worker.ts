@@ -629,7 +629,7 @@ function analyze(msg: AnalyzeMsg): void {
   const balanceOffsetDb =
     sumL > 0 && sumR > 0 ? 10 * Math.log10(sumR / sumL) : 0;
 
-  // ── source diagnostics (the SUNO pathology checks) ──────────────────
+  // ── source diagnostics (the AI-music pathology checks) ──────────────
   // 1. Bass placement: side-vs-mid energy below 140 Hz.
   const sideLp1 = new Biquad(); sideLp1.setLowpass(msg.fs, 140, 0.707);
   const midLp1 = new Biquad(); midLp1.setLowpass(msg.fs, 140, 0.707);

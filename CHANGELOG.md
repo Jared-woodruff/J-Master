@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.2
+- Broaden the messaging: J-Master masters output from any AI music
+  generator (SUNO, Udio, Riffusion, local models) and any WAV at all,
+  not just SUNO exports. Copy updated in the app and docs.
+
 ## 2.2.1
 - Fix track-strip spec row colliding with the action buttons (dropped the
   redundant true-peak spec; overflow now clips instead of overlapping).
@@ -36,7 +41,7 @@
 - Presets expanded to 30 genres; rack filter + overflow-safe rows.
 
 ## 1.6.0
-- **Track diagnosis:** SUNO-pathology check sheet with measured values,
+- **Track diagnosis:** AI-music pathology check sheet with measured values,
   one-click fixes, AUTO-FIX option; bass-mono processor; balance moved
   post-width so corrections act on the delivered image.
 

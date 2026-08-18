@@ -85,7 +85,7 @@ export interface DiagCheck {
   pass: boolean;
 }
 
-/** Derives SUNO-pathology issues + the full check sheet from measurements. */
+/** Derives AI-music pathology issues + the full check sheet from measurements. */
 function deriveDiagnosis(
   d: import('../audio/engine').SourceDiagnostics,
   balanceOffsetDb: number,
