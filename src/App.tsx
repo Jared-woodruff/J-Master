@@ -21,7 +21,8 @@ export function App() {
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
 
-  // Space = play/pause, Home = start, E = export,
+  // Space = play/pause, Home = start, ←/→ = seek 5 s (Shift = 30 s),
+  // R = reference, A = A/B slot, E = export,
   // Ctrl+S/O = save/open project, Ctrl+Z/Y = undo/redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -34,13 +35,26 @@ export function App() {
         if (k === 'z') { e.preventDefault(); s.undo(); return; }
         if (k === 'y') { e.preventDefault(); s.redo(); return; }
       }
-      const tag = (e.target as HTMLElement)?.tagName;
+      const el = e.target as HTMLElement;
+      const tag = el?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      // Focused knobs own the arrow keys.
+      const knobFocused = el?.getAttribute?.('role') === 'slider';
       if (e.code === 'Space') {
         e.preventDefault();
         s.togglePlay();
       } else if (e.code === 'Home') {
         s.seekSec(0);
+      } else if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && !knobFocused) {
+        if (!s.loaded) return;
+        e.preventDefault();
+        const step = (e.shiftKey ? 30 : 5) * (e.code === 'ArrowLeft' ? -1 : 1);
+        const d = s.source?.durationSec ?? 0;
+        s.seekSec(Math.max(0, Math.min(d, s.playheadSec + step)));
+      } else if (e.key === 'r' || e.key === 'R') {
+        if (s.loaded) s.setBypass(!s.bypass);
+      } else if (e.key === 'a' || e.key === 'A') {
+        if (s.loaded) s.switchSlot(s.activeSlot === 'A' ? 'B' : 'A');
       } else if (e.key === 'e' || e.key === 'E') {
         if (s.loaded) s.openExport(true);
       }

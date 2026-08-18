@@ -56,12 +56,12 @@ export function ConsolePanel() {
           <span className="seg" style={{ height: 20 }}>
             <button
               className={activeSlot === 'A' ? 'on' : ''}
-              title="Console snapshot A"
+              title="Console snapshot A · key A switches"
               onClick={() => switchSlot('A')}
             >A</button>
             <button
               className={activeSlot === 'B' ? 'on' : ''}
-              title={hasB ? 'Console snapshot B' : 'Console snapshot B (starts as a copy of A)'}
+              title={hasB ? 'Console snapshot B · key A switches' : 'Console snapshot B (starts as a copy of A) · key A switches'}
               onClick={() => switchSlot('B')}
             >B</button>
           </span>

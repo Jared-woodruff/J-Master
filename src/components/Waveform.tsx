@@ -73,6 +73,8 @@ export function Waveform() {
   const setLoudnessLane = useStore((s) => s.setLoudnessLane);
   const processedView = useStore((s) => s.processedView);
   const setProcessedView = useStore((s) => s.setProcessedView);
+  const outSplit = useStore((s) => s.outSplit);
+  const setOutSplit = useStore((s) => s.setOutSplit);
 
   // Compute the spectrogram lazily the first time SPEC is selected.
   useEffect(() => {
@@ -196,13 +198,30 @@ export function Waveform() {
           ctx.fillText(label, 3, y - 1);
         }
       } else {
+        // SPLIT compare: source lane above, processed master lane below.
+        const split = st.processedView && st.outSplit && !!engine.processedPreview;
+        const srcMid = split ? topY + waveH * 0.26 : midY;
+        const srcAmp = split ? waveH * 0.225 : waveH * 0.46;
+
         // centre rule
         ctx.strokeStyle = colHair;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(0, midY + 0.5);
-        ctx.lineTo(w, midY + 0.5);
+        ctx.moveTo(0, srcMid + 0.5);
+        ctx.lineTo(w, srcMid + 0.5);
         ctx.stroke();
+
+        if (split) {
+          const yDiv = topY + waveH * 0.52;
+          ctx.fillStyle = colHair;
+          ctx.fillRect(0, yDiv, w, 1);
+          ctx.font = `8px 'IBM Plex Mono', monospace`;
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = colSpec;
+          ctx.fillText('SRC', 3, yDiv - 11);
+          ctx.fillStyle = colSignal;
+          ctx.fillText('OUT', 3, yDiv + 4);
+        }
 
         // pick the pyramid level for this zoom
         const spp = (viewLen * fs) / w; // samples per pixel
@@ -216,7 +235,6 @@ export function Waveform() {
         const startBucket = (v.start * fs) / spb;
         const bucketsPerPx = spp / spb;
 
-        const amp = waveH * 0.46;
         for (let x = 0; x < w; x++) {
           const b0 = Math.max(0, Math.floor(startBucket + x * bucketsPerPx));
           const b1 = Math.min(buckets, Math.max(b0 + 1, Math.ceil(startBucket + (x + 1) * bucketsPerPx)));
@@ -232,11 +250,11 @@ export function Waveform() {
           rm = Math.sqrt(rm / cnt);
           const played = x <= playX;
           ctx.fillStyle = played ? 'rgba(255,77,0,0.42)' : colBar;
-          const y0 = midY - mx * amp;
-          const y1 = midY - mn * amp;
+          const y0 = srcMid - mx * srcAmp;
+          const y1 = srcMid - mn * srcAmp;
           ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0));
           ctx.fillStyle = played ? colSignal : colRms;
-          ctx.fillRect(x, midY - rm * amp, 1, Math.max(1, rm * 2 * amp));
+          ctx.fillRect(x, srcMid - rm * srcAmp, 1, Math.max(1, rm * 2 * srcAmp));
         }
       }
 
@@ -345,14 +363,24 @@ export function Waveform() {
         ctx.fillText(ppLane ? 'ST LUFS · SRC ▬ OUT —' : 'ST LUFS · SRC', 3, laneY + 2);
       }
 
-      // processed-master overlay (OUT): the rendered master's shape on top
+      // processed-master lane (OUT): ghosted over the source, or in its own
+      // lane below it when SPLIT is on.
       const pp = engine.processedPreview;
       if (st.processedView && pp && !specMode) {
-        const amp = waveH * 0.46;
+        const split = st.outSplit;
+        const outMid = split ? topY + waveH * 0.78 : midY;
+        const outAmp = split ? waveH * 0.225 : waveH * 0.46;
+        if (split) {
+          ctx.strokeStyle = colHair;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, outMid + 0.5);
+          ctx.lineTo(w, outMid + 0.5);
+          ctx.stroke();
+        }
         const startBucketP = (v.start * fs) / pp.spb;
         const bucketsPerPxP = (viewLen * fs) / w / pp.spb;
         ctx.fillStyle = colSignal;
-        ctx.globalAlpha = 0.34;
         for (let x = 0; x < w; x++) {
           const b0 = Math.max(0, Math.floor(startBucketP + x * bucketsPerPxP));
           const b1 = Math.min(pp.mins.length, Math.max(b0 + 1, Math.ceil(startBucketP + (x + 1) * bucketsPerPxP)));
@@ -362,8 +390,9 @@ export function Waveform() {
             if (pp.mins[b] < mn) mn = pp.mins[b];
             if (pp.maxs[b] > mx) mx = pp.maxs[b];
           }
-          const y0 = midY - mx * amp;
-          const y1 = midY - mn * amp;
+          ctx.globalAlpha = split ? (x <= playX ? 0.85 : 0.5) : 0.34;
+          const y0 = outMid - mx * outAmp;
+          const y1 = outMid - mn * outAmp;
           ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0));
         }
         ctx.globalAlpha = 1;
@@ -629,8 +658,13 @@ export function Waveform() {
             title="Short-term loudness lane (source)"
             onClick={() => setLoudnessLane(!loudnessLane)}>LUFS</button>
           <button className={processedView ? 'on' : ''}
-            title="Overlay the processed master's waveform + loudness (recomputes as you adjust)"
+            title="Show the processed master's waveform + loudness (recomputes as you adjust)"
             onClick={() => setProcessedView(!processedView)}>OUT</button>
+          {processedView && (
+            <button className={outSplit ? 'on' : ''}
+              title="Split compare: source above, master below"
+              onClick={() => setOutSplit(!outSplit)}>SPLIT</button>
+          )}
           <button title="Zoom out (wheel)" onClick={() => zoomBy(1.6)}>−</button>
           <button title="Zoom in (wheel)" onClick={() => zoomBy(1 / 1.6)}>+</button>
           <button title="Fit whole track" onClick={() => clampView(0, dur())} disabled={!zoomed}>FIT</button>

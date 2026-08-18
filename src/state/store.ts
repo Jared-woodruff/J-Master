@@ -334,6 +334,8 @@ interface JMasterState {
   exportOpusKbps: 128 | 192 | 256;
   exportHistory: ExportHistoryEntry[];
   processedView: boolean;
+  /** OUT comparison layout: ghost overlay (false) or split lanes (true). */
+  outSplit: boolean;
   /** Shared release metadata written into exports (title is per-track). */
   meta: { artist: string; album: string; year: string; genre: string; catalog: string; comment: string };
   toasts: Toast[];
@@ -404,6 +406,7 @@ interface JMasterState {
   setExportMp3Kbps(kbps: 192 | 256 | 320): void;
   setExportOpusKbps(kbps: 128 | 192 | 256): void;
   setProcessedView(on: boolean): void;
+  setOutSplit(on: boolean): void;
   toggleItemFixes(id: number): void;
   setMeta(field: keyof JMasterState['meta'], value: string): void;
   startExport(fileName: string, title: string): void;
@@ -643,6 +646,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     exportOpusKbps: 192 as const,
     exportHistory: [],
     processedView: false,
+    outSplit: false,
     meta: {
       artist: '',
       album: '',
@@ -1458,6 +1462,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       void scanBatchItems(set as any, get);
     },
 
+    setOutSplit(on) {
+      set({ outSplit: on });
+    },
+
     setProcessedView(on) {
       set({ processedView: on });
       if (on) {
@@ -1627,6 +1635,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     waveView: s.waveView,
     gridEnabled: s.gridEnabled,
     loudnessLane: s.loudnessLane,
+    outSplit: s.outSplit,
     activeSlot: s.activeSlot,
     snapshots: s.snapshots,
     autoFix: s.autoFix,

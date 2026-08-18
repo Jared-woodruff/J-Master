@@ -8,6 +8,11 @@
 - **GR·S meter:** live de-harsh gain reduction, above GR·C / GR·L.
 - The diagnosis sheet now marks fixes the console already covers as
   APPLIED instead of re-offering them.
+- **SPLIT compare view:** with OUT on, a SPLIT button stacks the source
+  waveform above the processed master on a shared timeline, so the
+  before/after difference is visible at a glance.
+- Keyboard: arrow keys seek 5 s (Shift: 30 s), R toggles the
+  loudness-matched reference, A switches the A/B snapshot slot.
 
 ## 2.2.2
 - Broaden the messaging: J-Master masters output from any AI music

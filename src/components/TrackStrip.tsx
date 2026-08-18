@@ -78,7 +78,7 @@ export function TrackStrip() {
         <button
           className={`btn btn-sm btn-toggle ${bypass ? 'on' : ''}`}
           onClick={() => setBypass(!bypass)}
-          title="Loudness-matched reference (hear the untouched source)"
+          title="Loudness-matched reference (hear the untouched source) · key R"
         >
           <span className={`lamp ${bypass ? 'signal' : ''}`} />
           REF
