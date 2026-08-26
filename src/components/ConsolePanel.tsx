@@ -39,7 +39,7 @@ export function ConsolePanel() {
   const setStem = useStore((s) => s.setStem);
 
   return (
-    <div className="panel">
+    <div className="panel panel-console">
       <div className="panel-head">
         <span className="title">Console</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

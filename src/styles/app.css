@@ -23,8 +23,16 @@
   display: flex;
   align-items: baseline;
   gap: 10px;
+  white-space: nowrap;
+  flex: none;
 }
 .titlebar .wordmark .sub { color: var(--text-spec); }
+@media (max-width: 860px) {
+  .titlebar .wordmark .sub { display: none; }
+}
+@media (max-width: 700px) {
+  .titlebar .rev { display: none; }
+}
 .titlebar-spacer { flex: 1; }
 .titlebar .rev { margin-right: var(--space-3); }
 .winbtns { display: flex; height: 100%; -webkit-app-region: no-drag; app-region: no-drag; }
@@ -45,7 +53,7 @@
 /* main workspace */
 .workspace {
   display: grid;
-  grid-template-rows: 64px minmax(180px, 30fr) minmax(300px, 42fr);
+  grid-template-rows: auto minmax(140px, 30fr) minmax(280px, 42fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -79,13 +87,18 @@
   background: var(--fill-primary);
   color: var(--fill-primary-text);
 }
+@media (max-width: 860px) {
+  .statusbar .hide-narrow { display: none; }
+}
 
 /* ── track strip ────────────────────────────────────────────────────── */
 .trackstrip {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: 0 var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  min-height: 64px;
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border-hairline);
   min-width: 0;
 }
@@ -130,7 +143,21 @@
 
 .strip-actions .btn-sm { padding: 0 10px; }
 
-.strip-actions { display: flex; gap: var(--space-2); align-items: center; }
+/* Actions wrap onto extra lines instead of clipping off-screen. */
+.strip-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .timecode { min-width: 0; font-size: 17px; }
+  .timecode .total { font-size: 12px; }
+}
 
 /* ── waveform ───────────────────────────────────────────────────────── */
 .wavesection { padding: var(--space-4); min-height: 0; display: flex; }
@@ -168,16 +195,34 @@
 .wave-controls button:disabled { opacity: 0.4; cursor: default; }
 .wave-controls button.on { background: var(--signal-500); color: #fff; }
 
+/* Narrow: drop the informational source line before it collides with the
+   view controls. The same specs live in the track strip and DIAG sheet. */
+@media (max-width: 860px) {
+  .wave-spec-tl { display: none; }
+}
+
 /* ── lower deck ─────────────────────────────────────────────────────── */
 .deck {
   display: grid;
-  grid-template-columns: 218px minmax(0, 1fr) 292px;
+  grid-template-columns: minmax(170px, 218px) minmax(0, 1fr) minmax(230px, 292px);
   border-top: 1px solid var(--border-hairline);
   min-height: 0;
 }
 
-.panel { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.panel { min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
 .panel + .panel { border-left: 1px solid var(--border-hairline); }
+
+/* Narrow: console takes the full width, presets and meters share the row
+   below it, so nothing gets crushed out of reach. */
+@media (max-width: 1060px) {
+  .deck {
+    grid-template-columns: minmax(170px, 1fr) minmax(0, 1.4fr);
+    grid-template-rows: minmax(0, 1.15fr) minmax(150px, 0.85fr);
+  }
+  .panel-console { grid-column: 1 / -1; grid-row: 1; border-left: none; }
+  .panel-presets { grid-column: 1; grid-row: 2; border-top: 1px solid var(--border-hairline); }
+  .panel-meters { grid-column: 2; grid-row: 2; border-top: 1px solid var(--border-hairline); }
+}
 
 .panel-head {
   display: flex;
@@ -278,12 +323,24 @@
 .preset.on .plufs { color: var(--text-accent); }
 
 /* console */
-.console-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--space-4) var(--space-4); gap: var(--space-3); overflow-y: auto; }
+.console-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--space-4) var(--space-4);
+  gap: var(--space-3);
+  overflow-y: auto;
+  container-type: inline-size;
+}
+/* Hairline grid lines come from a 1px gap over the border colour, so the
+   row can re-flow to any column count without orphaned borders. */
 .knobrow {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 1px;
   border: 1px solid var(--border-hairline);
-  background: var(--surface-raised);
+  background: var(--border-hairline);
 }
 .knobcell {
   display: flex;
@@ -292,8 +349,26 @@
   padding: var(--space-3) var(--space-1) var(--space-2);
   gap: 4px;
   position: relative;
+  background: var(--surface-raised);
+  min-width: 0;
+  overflow: hidden;
 }
-.knobcell + .knobcell { border-left: 1px solid var(--border-hairline); }
+.knobcell .spec {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The console's own width (not the window's) decides what to shed:
+   first the hint captions (before they truncate), then the row folds. */
+@container (max-width: 780px) {
+  .knobcell > .spec:not(.klabel) { display: none; }
+}
+@container (max-width: 560px) {
+  .knobrow { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .subrow { grid-template-columns: 1fr; }
+  .stemrow .stemhint { display: none; }
+}
 .knobcell .klabel { font-size: 10px; }
 .knobcell .kvalue { font-family: var(--font-mono); font-size: 12px; color: var(--text-body); }
 .knob-svg { cursor: ns-resize; touch-action: none; }
@@ -304,6 +379,7 @@
 .stemrow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   border: 1px solid var(--border-hairline);
   background: var(--surface-raised);
@@ -437,7 +513,7 @@
   transition: border-color var(--dur-fast) var(--ease-mech);
 }
 .dropzone.dragover { border-color: var(--signal-500); }
-.dropzone .headline { font-size: 40px; }
+.dropzone .headline { font-size: clamp(28px, 6vw, 40px); }
 .dropzone .accentdot { color: var(--signal-500); }
 
 /* ── dialog ─────────────────────────────────────────────────────────── */
@@ -546,7 +622,7 @@
 .batchrow .breorder:disabled { opacity: 0.25; cursor: default; }
 
 /* toasts */
-.toasts { position: fixed; left: var(--space-4); bottom: 34px; display: flex; flex-direction: column; gap: var(--space-2); z-index: 60; }
+.toasts { position: fixed; left: var(--space-4); bottom: 34px; display: flex; flex-direction: column; gap: var(--space-2); z-index: 60; max-width: calc(100vw - 2 * var(--space-4)); }
 .toast {
   display: flex;
   align-items: center;
@@ -558,4 +634,29 @@
   font-size: 11.5px;
   letter-spacing: 0.06em;
   box-shadow: var(--shadow-overlay);
+  animation: rise-in var(--dur-med) var(--ease-mech);
+}
+
+/* ── motion: mechanical, brief, honest ──────────────────────────────── */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.dialog { animation: rise-in var(--dur-med) var(--ease-mech); }
+
+/* Every small control presses down 1px like a real switch. */
+.transport button:active:not(:disabled),
+.wave-controls button:active:not(:disabled),
+.seg button:active:not(:disabled),
+.platgrid button:active:not(:disabled),
+.stepper button:active,
+.preset-filter button:active,
+.winbtn:active,
+.statusbar .theme-switch button:active,
+.preset:active {
+  transform: translateY(var(--press-shift));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast, .dialog { animation: none; }
 }

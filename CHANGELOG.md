@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+- **Responsive layout.** The console now re-flows instead of clipping on
+  narrow windows: track-strip actions wrap onto extra lines, the lower
+  deck stacks (console full width, presets and meters side by side
+  below) under ~1060 px, the knob row sheds its hint captions and then
+  folds to two rows of four as its panel tightens (container queries),
+  fades and output stack, and informational text (waveform source line,
+  status-bar mottos, title-bar labels) steps aside before any control
+  does. Window minimum drops from 1120x720 to 720x560 so scaled laptop
+  displays fit.
+- **Motion polish:** dialogs and toasts rise in briefly, and every small
+  control (transport, wave buttons, segments, platform grid, steppers,
+  presets) presses down 1 px like a real switch. All of it respects the
+  reduced-motion system setting.
+
 ## 2.3.0
 - **Fix: SMOOTH and BALANCE were silent in the real-time preview.** Their
   slewed values were never advanced in the live chain, so the knobs (and

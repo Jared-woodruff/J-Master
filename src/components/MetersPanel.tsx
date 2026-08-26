@@ -35,7 +35,7 @@ export function MetersPanel() {
   const targetPct = lufsPct(targetLufs);
 
   return (
-    <div className="panel">
+    <div className="panel panel-meters">
       <div className="panel-head">
         <span className="title">Meters</span>
         <span className="spec">BS.1770-4</span>

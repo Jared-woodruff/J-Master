@@ -115,9 +115,9 @@ export function App() {
       )}
       <footer className="statusbar">
         <span className="spec">JMW SOFTWARE · JAMWARE RECORDS</span>
-        <span className="spec" style={{ opacity: 0.6 }}>MUSIC, MANUFACTURED.</span>
+        <span className="spec hide-narrow" style={{ opacity: 0.6 }}>MUSIC, MANUFACTURED.</span>
         <span className="grow" />
-        <span className="spec">ENGINE 48K / 32-BIT FLOAT</span>
+        <span className="spec hide-narrow">ENGINE 48K / 32-BIT FLOAT</span>
         <div className="theme-switch">
           <button onClick={() => useStore.getState().openKeys(true)} title="Keyboard shortcuts (?)">KEYS</button>
         </div>

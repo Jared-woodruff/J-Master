@@ -21,8 +21,10 @@ function createWindow(): void {
   win = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 1120,
-    minHeight: 720,
+    // Small enough for scaled laptop displays; the layout re-flows below
+    // ~1060 CSS px instead of clipping controls.
+    minWidth: 720,
+    minHeight: 560,
     frame: false,
     backgroundColor: '#0D0E10',
     show: false,

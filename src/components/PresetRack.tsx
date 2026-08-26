@@ -19,7 +19,7 @@ export function PresetRack() {
   }, [filter]);
 
   return (
-    <div className="panel">
+    <div className="panel panel-presets">
       <div className="panel-head">
         <span className="title">Presets</span>
         <span className="spec">{PRESETS.length} GENRES</span>
