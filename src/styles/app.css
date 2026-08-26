@@ -686,6 +686,9 @@
   letter-spacing: 0.06em;
   box-shadow: var(--shadow-overlay);
   animation: rise-in var(--dur-med) var(--ease-mech);
+  max-width: min(460px, calc(100vw - 2 * var(--space-4)));
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 
 /* ── motion: mechanical, brief, honest ──────────────────────────────── */

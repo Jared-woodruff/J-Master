@@ -52,7 +52,8 @@ export function DiagDialog() {
 
         <div>
           <div className="display dtitle">Track diagnosis</div>
-          <div className="spec" style={{ marginTop: 4 }}>
+          <div className="spec" title={source.name}
+            style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             SOURCE CHECKS · {issues.length === 0 ? 'ALL CLEAR' : `${issues.length} FOUND`} · {source.name.toUpperCase()}
           </div>
         </div>

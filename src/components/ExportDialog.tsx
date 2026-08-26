@@ -204,7 +204,8 @@ export function ExportDialog() {
             <div className="statgrid" style={{ maxHeight: 120, overflowY: 'auto' }}>
               {history.slice(0, 6).map((h, i) => (
                 <div className="row" key={`${h.when}-${i}`} style={{ alignItems: 'center', gap: 8 }}>
-                  <span className="spec" style={{ color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 210, letterSpacing: 0 }}>
+                  <span className="spec" title={h.name}
+                    style={{ color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240, letterSpacing: 0 }}>
                     {h.name}
                   </span>
                   <span className="leader" />
@@ -248,7 +249,8 @@ function StatRow({ label, value }: { label: string; value: string }) {
     <div className="row">
       <span className="spec">{label}</span>
       <span className="leader" />
-      <span className="spec-value" style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+      <span className="spec-value" title={value}
+        style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
     </div>
   );
 }

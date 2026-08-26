@@ -49,7 +49,7 @@ export function TrackStrip() {
       </div>
 
       <div className="trackmeta">
-        <div className="name">{source.name}</div>
+        <div className="name" title={source.name}>{source.name}</div>
         <div className="specs">
           <span className="spec">IN {source.lufs.toFixed(1)} LUFS</span>
           <span className="spec">{(source.originalSampleRate / 1000).toFixed(1)}K{source.originalBitDepth ? `/${source.originalBitDepth}` : ''}→48K</span>

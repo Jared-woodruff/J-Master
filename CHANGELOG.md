@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Long track names, artists, and genres can no longer overflow any
+  surface: the diagnosis and match dialogs clip or wrap their name
+  lines, toasts cap their width and wrap, and every truncated name
+  shows the full text on hover.
 - **Cover art on export.** Add a front-cover image in the metadata block
   (click or drop; auto-scaled to a ≤1000 px JPEG) and it is embedded in
   every format: MP3 ID3 APIC, FLAC PICTURE block, Ogg Opus

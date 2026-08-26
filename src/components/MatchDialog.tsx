@@ -71,7 +71,7 @@ export function MatchDialog() {
         </div>
 
         {!matchRef && (
-          <div className="spec" style={{ padding: '8px 0' }}>
+          <div className="spec" style={{ padding: '8px 0', whiteSpace: 'normal' }}>
             LOAD A REFERENCE TRACK. ITS TONAL BALANCE, LOUDNESS AND WIDTH ARE
             MEASURED AGAINST {source.name.toUpperCase()}.
           </div>
