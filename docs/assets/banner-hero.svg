@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="170" viewBox="0 0 860 170">
+  <rect width="860" height="170" fill="#0D0E10"/>
+  <rect x="0.5" y="0.5" width="859" height="169" fill="none" stroke="#33373C"/>
+  <path d="M9 14h10M14 9v10" stroke="#878D93" stroke-width="1"/><path d="M841 14h10M846 9v10" stroke="#878D93" stroke-width="1"/><path d="M9 156h10M14 151v10" stroke="#878D93" stroke-width="1"/><path d="M841 156h10M846 151v10" stroke="#878D93" stroke-width="1"/>
+  
+  <circle cx="96" cy="85" r="32.400000000000006" stroke="#FBFAF7" stroke-width="4.050000000000001" fill="none"/>
+  <circle cx="96" cy="85" r="24.3" stroke="#FBFAF7" stroke-width="2.0250000000000004" fill="none"/>
+  <circle cx="96" cy="85" r="17.55" stroke="#FBFAF7" stroke-width="2.0250000000000004" fill="none"/>
+  <rect x="90.6" y="79.6" width="10.8" height="10.8" fill="#FF4D00"/>
+  <path d="M96 43.15v5.4M96 121.45v5.4M54.15 85h5.4M132.45 85h5.4" stroke="#FBFAF7" stroke-width="2.7"/>
+  <text x="176" y="86" font-family="'Arial Black','Segoe UI',Arial,sans-serif" font-weight="900" font-size="46" letter-spacing="6" fill="#FBFAF7">J-MASTER</text>
+  <text x="179" y="114" font-family="'Consolas','Courier New',monospace" font-size="12" letter-spacing="3.5" fill="#FF4D00">MASTERING CONSOLE FOR THE AI MUSIC ERA</text>
+  <text x="179" y="136" font-family="'Consolas','Courier New',monospace" font-size="10" letter-spacing="2" fill="#878D93">JMW SOFTWARE · JAMWARE RECORDS · MUSIC, MANUFACTURED.</text>
+  <text x="846" y="40" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="10" letter-spacing="2" fill="#878D93">WIN X64 · ARM64</text>
+  <text x="846" y="56" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="10" letter-spacing="2" fill="#878D93">BS.1770-4</text>
+</svg>

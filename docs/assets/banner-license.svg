@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="52" viewBox="0 0 860 52">
+  <rect width="860" height="52" fill="#0D0E10"/>
+  <rect x="0" y="0" width="860" height="2" fill="#FBFAF7"/>
+  <rect x="12" y="21" width="10" height="10" fill="#FF4D00"/>
+  <text x="36" y="34" font-family="'Arial Black','Segoe UI',Arial,sans-serif" font-weight="900" font-size="19" letter-spacing="4" fill="#FBFAF7">LICENSE</text>
+  <line x1="189" y1="28" x2="789.6" y2="28" stroke="#33373C" stroke-dasharray="1 4"/>
+  <text x="848" y="32" text-anchor="end" font-family="'Consolas','Courier New',monospace" font-size="10" letter-spacing="2" fill="#878D93">GPL-3.0</text>
+</svg>
