@@ -10,6 +10,8 @@ export interface Id3Tags {
   comment?: string;
   track?: string;      // "3" or "3/12"
   catalog?: string;    // stored as TXXX:CATALOGNUMBER
+  /** Front-cover art, written as an APIC frame. */
+  picture?: { mime: string; data: Uint8Array };
 }
 
 function utf16le(s: string): Uint8Array {
@@ -67,6 +69,18 @@ function txxxFrame(description: string, value: string): Uint8Array {
   return frame('TXXX', payload);
 }
 
+function apicFrame(pic: { mime: string; data: Uint8Array }): Uint8Array {
+  // encoding(latin1) + mime + 0x00 + type(front cover) + desc 0x00 + image
+  const payload = new Uint8Array(1 + pic.mime.length + 1 + 1 + 1 + pic.data.length);
+  payload[0] = 0x00;
+  for (let i = 0; i < pic.mime.length; i++) payload[1 + i] = pic.mime.charCodeAt(i) & 0xff;
+  payload[1 + pic.mime.length] = 0x00;
+  payload[2 + pic.mime.length] = 0x03; // front cover
+  payload[3 + pic.mime.length] = 0x00; // empty latin1 description
+  payload.set(pic.data, 4 + pic.mime.length);
+  return frame('APIC', payload);
+}
+
 export function buildId3v23(tags: Id3Tags): Uint8Array {
   const frames: Uint8Array[] = [];
   if (tags.title) frames.push(textFrame('TIT2', tags.title));
@@ -77,6 +91,7 @@ export function buildId3v23(tags: Id3Tags): Uint8Array {
   if (tags.track) frames.push(textFrame('TRCK', tags.track));
   if (tags.catalog) frames.push(txxxFrame('CATALOGNUMBER', tags.catalog));
   if (tags.comment) frames.push(commentFrame(tags.comment));
+  if (tags.picture) frames.push(apicFrame(tags.picture));
   if (frames.length === 0) return new Uint8Array(0);
 
   let size = 0;

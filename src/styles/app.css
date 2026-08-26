@@ -635,6 +635,31 @@
 .batchrow .breorder:hover:not(:disabled) { color: var(--text-body); }
 .batchrow .breorder:disabled { opacity: 0.25; cursor: default; }
 
+/* cover art tile */
+.cover-tile {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  border: 1px dashed var(--border-mid);
+  background: var(--surface-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-mech);
+}
+.cover-tile:hover:not(:disabled) { border-color: var(--signal-500); }
+.cover-tile.has { border-style: solid; border-color: var(--border-mid); }
+.cover-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover-tile .spec { font-size: 9px; }
+.cover-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
 /* toasts */
 .toasts { position: fixed; left: var(--space-4); bottom: 34px; display: flex; flex-direction: column; gap: var(--space-2); z-index: 60; max-width: calc(100vw - 2 * var(--space-4)); }
 .toast {

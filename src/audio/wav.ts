@@ -1,5 +1,8 @@
 // 24-bit / 16-bit PCM WAV encoder with TPDF dither and RIFF LIST/INFO tags.
+// Cover art rides in an "id3 " chunk (an embedded ID3v2.3 tag with an APIC
+// frame), the de-facto standard most players read from WAV.
 import { quantizeStereo } from './flac';
+import { buildId3v23 } from './id3';
 
 export interface WavInfoTags {
   title?: string;
@@ -9,6 +12,7 @@ export interface WavInfoTags {
   genre?: string;
   comment?: string;
   track?: string;
+  picture?: { mime: string; data: Uint8Array };
 }
 
 export function encodeWavFromInt(
@@ -23,7 +27,8 @@ export function encodeWavFromInt(
   const blockAlign = numCh * bytesPerSample;
   const dataSize = qL.length * blockAlign;
   const infoChunk = buildInfoChunk(tags);
-  const buf = new ArrayBuffer(44 + dataSize + infoChunk.length);
+  const id3Chunk = buildId3Chunk(tags);
+  const buf = new ArrayBuffer(44 + dataSize + infoChunk.length + id3Chunk.length);
   const view = new DataView(buf);
 
   const writeStr = (off: number, s: string) => {
@@ -31,7 +36,7 @@ export function encodeWavFromInt(
   };
 
   writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize + infoChunk.length, true);
+  view.setUint32(4, 36 + dataSize + infoChunk.length + id3Chunk.length, true);
   writeStr(8, 'WAVE');
   writeStr(12, 'fmt ');
   view.setUint32(16, 16, true);
@@ -60,7 +65,25 @@ export function encodeWavFromInt(
     }
   }
   new Uint8Array(buf).set(infoChunk, off);
+  new Uint8Array(buf).set(id3Chunk, off + infoChunk.length);
   return buf;
+}
+
+function buildId3Chunk(tags?: WavInfoTags): Uint8Array {
+  if (!tags?.picture) return new Uint8Array(0);
+  const tag = buildId3v23({
+    title: tags.title,
+    artist: tags.artist,
+    album: tags.album,
+    picture: tags.picture,
+  });
+  if (tag.length === 0) return new Uint8Array(0);
+  const padded = tag.length + (tag.length & 1); // RIFF word alignment
+  const chunk = new Uint8Array(8 + padded);
+  chunk[0] = 0x69; chunk[1] = 0x64; chunk[2] = 0x33; chunk[3] = 0x20; // "id3 "
+  new DataView(chunk.buffer).setUint32(4, tag.length, true);
+  chunk.set(tag, 8);
+  return chunk;
 }
 
 export function encodeWav(

@@ -184,6 +184,13 @@ async function openProject(
       snapshots: proj.snapshots ?? { A: null, B: null },
       activeSlot: proj.activeSlot ?? 'A',
       meta: proj.meta ?? get().meta,
+      coverArt: proj.cover
+        ? {
+            mime: proj.cover.mime, name: proj.cover.name,
+            width: proj.cover.width, height: proj.cover.height,
+            data: b64ToBytes(proj.cover.b64),
+          }
+        : null,
       exportFormat: proj.export?.format ?? 'wav',
       exportBitDepth: proj.export?.bitDepth ?? 24,
       exportMp3Kbps: proj.export?.mp3Kbps ?? 320,
@@ -266,6 +273,22 @@ interface ProjectFile {
   meta: JMasterState['meta'];
   export: { format: ExportFormat; bitDepth: 16 | 24; mp3Kbps: 192 | 256 | 320; opusKbps: 128 | 192 | 256 };
   batch: { dir: string | null; items: { name: string; path: string | null; presetId: string | null; isrc?: string }[] };
+  cover?: { mime: string; name: string; width: number; height: number; b64: string } | null;
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+function b64ToBytes(b64: string): Uint8Array {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
 }
 
 let suppressDiagOnce = false;
@@ -283,6 +306,8 @@ interface JMasterState {
   /** Recently loaded audio files (Electron only: needs a filesystem path). */
   recentFiles: { name: string; path: string }[];
   keysOpen: boolean;
+  /** Front-cover art embedded into export tags (session + project file). */
+  coverArt: { mime: string; data: Uint8Array; width: number; height: number; name: string } | null;
 
   macros: MacroValues;
   presetId: string | null;
@@ -413,6 +438,9 @@ interface JMasterState {
   toggleLoop(atSec?: number): void;
   pruneRecentFile(path: string): void;
   openKeys(open: boolean): void;
+  /** Downscales to ≤1000 px JPEG and stores it for embedding on export. */
+  setCoverFromFile(file: File): Promise<void>;
+  clearCover(): void;
   setTheme(theme: 'plate' | 'paper'): void;
   setWaveView(view: 'wave' | 'spec'): void;
   openExport(open: boolean): void;
@@ -464,6 +492,12 @@ export function tagsFrom(
     comment: s.meta.comment || undefined,
     trackNumber,
     trackTotal,
+    picture: s.coverArt
+      ? {
+          mime: s.coverArt.mime, data: s.coverArt.data,
+          width: s.coverArt.width, height: s.coverArt.height,
+        }
+      : undefined,
   };
 }
 
@@ -613,6 +647,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     loopEndSec: null,
     recentFiles: [],
     keysOpen: false,
+    coverArt: null,
 
     macros: { tone: 0, shape: 0, air: 0, smooth: 0, character: 0, density: 0, impact: 0, width: 1 },
     presetId: 'flat',
@@ -1393,6 +1428,34 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       set({ keysOpen: open });
     },
 
+    async setCoverFromFile(file) {
+      try {
+        const bmp = await createImageBitmap(file);
+        const scale = Math.min(1, 1000 / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(bmp, 0, 0, w, h);
+        bmp.close();
+        const blob: Blob | null = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.9));
+        if (!blob) throw new Error('encode failed');
+        const data = new Uint8Array(await blob.arrayBuffer());
+        set({ coverArt: { mime: 'image/jpeg', data, width: w, height: h, name: file.name } });
+        get().pushToast(`COVER SET · ${w}×${h} · ${Math.max(1, Math.round(data.length / 1024))} KB JPEG`, 'run');
+      } catch {
+        get().pushToast('COVER IMAGE UNREADABLE', 'fault');
+      }
+    },
+
+    clearCover() {
+      set({ coverArt: null });
+    },
+
     setTheme(theme) {
       document.documentElement.setAttribute('data-theme', theme);
       set({ theme });
@@ -1436,6 +1499,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             isrc: it.isrc,
           })),
         },
+        cover: s.coverArt
+          ? {
+              mime: s.coverArt.mime, name: s.coverArt.name,
+              width: s.coverArt.width, height: s.coverArt.height,
+              b64: bytesToB64(s.coverArt.data),
+            }
+          : null,
       };
       const json = JSON.stringify(proj, null, 2);
       const base = s.source ? s.source.name.replace(/\.[^.]+$/, '') : 'session';

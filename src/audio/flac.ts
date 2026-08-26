@@ -15,6 +15,34 @@ export interface FlacTags {
   [field: string]: string; // e.g. TITLE, ARTIST, ALBUM, CATALOGNUMBER…
 }
 
+export interface FlacPicture {
+  mime: string;
+  data: Uint8Array;
+  width?: number;
+  height?: number;
+}
+
+/** RFC 9639 PICTURE payload (also base64'd into Opus METADATA_BLOCK_PICTURE). */
+export function buildFlacPicturePayload(pic: FlacPicture): Uint8Array {
+  const enc = new TextEncoder();
+  const mime = enc.encode(pic.mime);
+  const out = new Uint8Array(4 + 4 + mime.length + 4 + 4 * 4 + 4 + pic.data.length);
+  const dv = new DataView(out.buffer);
+  let off = 0;
+  const be32 = (v: number) => { dv.setUint32(off, v >>> 0, false); off += 4; };
+  be32(3);                    // picture type: front cover
+  be32(mime.length);
+  out.set(mime, off); off += mime.length;
+  be32(0);                    // empty description
+  be32(pic.width ?? 0);
+  be32(pic.height ?? 0);
+  be32(24);                   // colour depth (informational)
+  be32(0);                    // indexed colours: none
+  be32(pic.data.length);
+  out.set(pic.data, off);
+  return out;
+}
+
 class BitWriter {
   private buf = new Uint8Array(1 << 16);
   private len = 0;
@@ -450,14 +478,16 @@ export function encodeFlacFromInt(
   sampleRate: number,
   bitDepth: 16 | 24,
   tags?: FlacTags,
+  picture?: FlacPicture,
 ): ArrayBuffer {
   const n = qL.length;
   const out = new BitWriter();
   out.writeByte(0x66); out.writeByte(0x4c); out.writeByte(0x61); out.writeByte(0x43); // fLaC
 
   const hasTags = tags && Object.keys(tags).length > 0;
+  const hasPicture = !!picture;
   // STREAMINFO
-  out.writeBits(hasTags ? 0 : 1, 1);
+  out.writeBits(hasTags || hasPicture ? 0 : 1, 1);
   out.writeBits(0, 7);
   out.writeBits(34, 24);
   out.writeBits(BLOCK, 16);
@@ -471,7 +501,14 @@ export function encodeFlacFromInt(
   out.writeBits(n >>> 0, 32);
   for (let i = 0; i < 16; i++) out.writeByte(0);
 
-  if (hasTags) writeVorbisComment(out, tags!);
+  if (hasTags) writeVorbisComment(out, tags!, !hasPicture);
+  if (hasPicture) {
+    const payload = buildFlacPicturePayload(picture!);
+    out.writeBits(1, 1);   // last metadata block
+    out.writeBits(6, 7);   // PICTURE
+    out.writeBits(payload.length, 24);
+    for (let i = 0; i < payload.length; i++) out.writeByte(payload[i]);
+  }
 
   const bufA = new Int32Array(BLOCK);   // left / mid / side depending on mode
   const bufB = new Int32Array(BLOCK);
@@ -571,7 +608,7 @@ export function encodeFlac(
   return encodeFlacFromInt(qL, qR, sampleRate, bitDepth, tags);
 }
 
-function writeVorbisComment(out: BitWriter, tags: FlacTags): void {
+function writeVorbisComment(out: BitWriter, tags: FlacTags, isLast: boolean): void {
   const enc = new TextEncoder();
   const vendor = enc.encode('J-Master (JMW Software)');
   const entries = Object.entries(tags)
@@ -580,7 +617,7 @@ function writeVorbisComment(out: BitWriter, tags: FlacTags): void {
   let size = 4 + vendor.length + 4;
   for (const e of entries) size += 4 + e.length;
 
-  out.writeBits(1, 1);   // last metadata block
+  out.writeBits(isLast ? 1 : 0, 1);   // last metadata block?
   out.writeBits(4, 7);   // VORBIS_COMMENT
   out.writeBits(size, 24);
   const le32 = (v: number) => {

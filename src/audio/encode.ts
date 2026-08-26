@@ -20,6 +20,9 @@ export interface TrackTags {
   comment?: string;
   trackNumber?: number;
   trackTotal?: number;
+  /** Front-cover art, embedded per format (APIC / PICTURE block /
+      METADATA_BLOCK_PICTURE / WAV "id3 " chunk). */
+  picture?: { mime: string; data: Uint8Array; width?: number; height?: number };
 }
 
 export interface EncodeOptions {
@@ -57,6 +60,7 @@ export async function encodeAudio(
         genre: t.genre,
         comment: joinComment(t),
         track: trackStr,
+        picture: t.picture,
       };
       const { qL, qR } = quantizeStereo(L, R, opts.bitDepth);
       return {
@@ -77,7 +81,7 @@ export async function encodeAudio(
       if (t?.trackTotal) flacTags.TRACKTOTAL = `${t.trackTotal}`;
       const { qL, qR } = quantizeStereo(L, R, opts.bitDepth);
       return {
-        data: encodeFlacFromInt(qL, qR, sampleRate, opts.bitDepth, flacTags),
+        data: encodeFlacFromInt(qL, qR, sampleRate, opts.bitDepth, flacTags, t?.picture),
         ext: 'flac', mime: 'audio/flac',
       };
     }
@@ -91,7 +95,7 @@ export async function encodeAudio(
       if (t?.catalog) opusTags.CATALOGNUMBER = t.catalog;
       if (t?.comment) opusTags.COMMENT = t.comment;
       if (t?.trackNumber) opusTags.TRACKNUMBER = `${t.trackNumber}`;
-      const data = await encodeOggOpus(L, R, sampleRate, opts.opusKbps ?? 192, opusTags);
+      const data = await encodeOggOpus(L, R, sampleRate, opts.opusKbps ?? 192, opusTags, t?.picture);
       return { data, ext: 'opus', mime: 'audio/ogg' };
     }
     case 'mp3': {
@@ -104,6 +108,7 @@ export async function encodeAudio(
         comment: t.comment,
         catalog: t.catalog,
         track: trackStr,
+        picture: t.picture,
       };
       const audio = encodeMp3(L, R, sampleRate, opts.mp3Kbps);
       const tag = id3Tags ? buildId3v23(id3Tags) : new Uint8Array(0);

@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Cover art on export.** Add a front-cover image in the metadata block
+  (click or drop; auto-scaled to a ≤1000 px JPEG) and it is embedded in
+  every format: MP3 ID3 APIC, FLAC PICTURE block, Ogg Opus
+  METADATA_BLOCK_PICTURE (the tags packet now spans Ogg pages as
+  needed), and a WAV "id3 " chunk. Covers travel with .jmaster projects
+  and apply to batch exports too.
 - **Monitor matrix:** MONO / SIDE / L / R monitoring from the meters rack
   for mono-compatibility and image checks. Applied after the chain and
   before the meters (they read what you hear); never touches an export.

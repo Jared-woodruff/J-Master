@@ -3,6 +3,8 @@
 // Ogg container per RFC 7845 (OpusHead + OpusTags header pages, granule
 // positions in 48 kHz samples, page CRCs).
 
+import { buildFlacPicturePayload, FlacPicture } from './flac';
+
 export interface OpusTagsInput {
   [field: string]: string; // TITLE, ARTIST, ALBUM, DATE, GENRE…
 }
@@ -73,6 +75,57 @@ function buildPage(
   return page;
 }
 
+/**
+ * Pages for ONE packet that may exceed a single page (65025 body bytes):
+ * the full lacing sequence is split into runs of ≤255 segments, and every
+ * page after the first carries the continuation flag with granule -1
+ * (no packet ends there).
+ */
+function buildPagesForPacket(
+  packet: Uint8Array,
+  granule: number,
+  seqStart: number,
+  firstFlags: number,
+): Uint8Array[] {
+  const lacing: number[] = [];
+  let rem = packet.length;
+  while (rem >= 255) { lacing.push(255); rem -= 255; }
+  lacing.push(rem);
+
+  const pages: Uint8Array[] = [];
+  let li = 0, bodyOff = 0, seq = seqStart, first = true;
+  while (li < lacing.length) {
+    const segs = lacing.slice(li, li + 255);
+    let bodyLen = 0;
+    for (const s of segs) bodyLen += s;
+    const isFinal = li + 255 >= lacing.length;
+    const page = new Uint8Array(27 + segs.length + bodyLen);
+    const dv = new DataView(page.buffer);
+    page[0] = 0x4f; page[1] = 0x67; page[2] = 0x67; page[3] = 0x53; // OggS
+    page[4] = 0;
+    page[5] = first ? firstFlags : 0x01;
+    if (isFinal) {
+      dv.setUint32(6, granule >>> 0, true);
+      dv.setUint32(10, Math.floor(granule / 4294967296), true);
+    } else {
+      dv.setUint32(6, 0xffffffff, true);
+      dv.setUint32(10, 0xffffffff, true);
+    }
+    dv.setUint32(14, SERIAL, true);
+    dv.setUint32(18, seq++, true);
+    dv.setUint32(22, 0, true);
+    page[26] = segs.length;
+    page.set(segs, 27);
+    page.set(packet.subarray(bodyOff, bodyOff + bodyLen), 27 + segs.length);
+    dv.setUint32(22, crc32(page), true);
+    pages.push(page);
+    li += 255;
+    bodyOff += bodyLen;
+    first = false;
+  }
+  return pages;
+}
+
 function buildOpusHead(preskip: number, inputRate: number): Uint8Array {
   const h = new Uint8Array(19);
   const dv = new DataView(h.buffer);
@@ -86,12 +139,24 @@ function buildOpusHead(preskip: number, inputRate: number): Uint8Array {
   return h;
 }
 
-function buildOpusTags(tags?: OpusTagsInput): Uint8Array {
+function base64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+function buildOpusTags(tags?: OpusTagsInput, picture?: FlacPicture): Uint8Array {
   const enc = new TextEncoder();
   const vendor = enc.encode('J-Master (JMW Software)');
   const entries = Object.entries(tags ?? {})
     .filter(([, v]) => v && v.length > 0)
     .map(([k, v]) => enc.encode(`${k.toUpperCase()}=${v}`));
+  if (picture) {
+    // RFC 7845 §5.2.1: the FLAC PICTURE payload, base64, as a comment.
+    entries.push(enc.encode(`METADATA_BLOCK_PICTURE=${base64(buildFlacPicturePayload(picture))}`));
+  }
   let size = 8 + 4 + vendor.length + 4;
   for (const e of entries) size += 4 + e.length;
   const t = new Uint8Array(size);
@@ -118,6 +183,7 @@ export async function encodeOggOpus(
   sampleRate: number,
   kbps: number,
   tags?: OpusTagsInput,
+  picture?: FlacPicture,
 ): Promise<ArrayBuffer> {
   if (!opusSupported()) throw new Error('WebCodecs AudioEncoder unavailable');
   const n = L.length;
@@ -177,7 +243,9 @@ export async function encodeOggOpus(
   const pages: Uint8Array[] = [];
   let seq = 0;
   pages.push(buildPage([buildOpusHead(preskip, sampleRate)], 0, seq++, 0x02));
-  pages.push(buildPage([buildOpusTags(tags)], 0, seq++, 0));
+  const tagPages = buildPagesForPacket(buildOpusTags(tags, picture), 0, seq, 0);
+  seq += tagPages.length;
+  pages.push(...tagPages);
   const totalGranule = n + preskip; // clamp playback to the real length
   for (let i = 0; i < packets.length; i += 50) {
     const group = packets.slice(i, i + 50);
