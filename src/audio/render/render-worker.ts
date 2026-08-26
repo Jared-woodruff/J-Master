@@ -68,27 +68,48 @@ interface TempoMsg {
   fs: number;
 }
 
-interface PreviewMsg {
-  type: 'preview';
+/** Source cached in-worker so each preview costs only a params message. */
+interface PrimeMsg {
+  type: 'prime';
   l: ArrayBuffer;
   r: ArrayBuffer;
   fs: number;
-  params: ChainParams;
   sourceLufs: number;
+}
+let primedL: Float32Array | null = null;
+let primedR: Float32Array | null = null;
+let primedFs = 48000;
+let primedLufs = -18;
+
+function prime(msg: PrimeMsg): void {
+  primedL = new Float32Array(msg.l);
+  primedR = new Float32Array(msg.r);
+  primedFs = msg.fs;
+  primedLufs = msg.sourceLufs;
+}
+
+interface PreviewMsg {
+  type: 'preview';
+  params: ChainParams;
   reqId?: number;
 }
 
 /**
  * Processed-master preview: full chain + loudness solve + limiter, reduced to
- * one peaks level and a short-term loudness series — no encode.
+ * one peaks level and a short-term loudness series — no encode. Works on the
+ * primed source (the chain mutates in place, so it copies locally).
  */
 function preview(msg: PreviewMsg): void {
-  const L = new Float32Array(msg.l);
-  const R = new Float32Array(msg.r);
-  const fs = msg.fs;
+  if (!primedL || !primedR) {
+    post({ type: 'previewed', reqId: msg.reqId, unprimed: true });
+    return;
+  }
+  const L = new Float32Array(primedL);
+  const R = new Float32Array(primedR);
+  const fs = primedFs;
   const n = L.length;
   const params: ChainParams = { ...msg.params };
-  params.stagingGainDb = NOMINAL_LUFS - msg.sourceLufs;
+  params.stagingGainDb = NOMINAL_LUFS - primedLufs;
   params.outputGainDb = 0;
   params.limiterDelta = false;
   const coreParams: ChainParams = { ...params, ceilingDb: 24 };
@@ -154,7 +175,7 @@ function preview(msg: PreviewMsg): void {
 }
 
 self.onmessage = (e: MessageEvent) => {
-  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg;
+  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg | PrimeMsg;
   if (msg.type === 'analyze') analyze(msg);
   else if (msg.type === 'render') {
     void render(msg).catch((err) => {
@@ -164,6 +185,7 @@ self.onmessage = (e: MessageEvent) => {
   else if (msg.type === 'calibrate') calibrate(msg);
   else if (msg.type === 'spectrogram') spectrogram(msg);
   else if (msg.type === 'tempo') tempo(msg);
+  else if (msg.type === 'prime') prime(msg);
   else if (msg.type === 'preview') preview(msg);
   else if (msg.type === 'profile') profile(msg);
 };

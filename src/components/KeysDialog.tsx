@@ -6,7 +6,7 @@ const ROWS: [string, string][] = [
   ['RETURN TO START', 'HOME'],
   ['SEEK 5 S / 30 S', '← → / SHIFT ← →'],
   ['LOOP SECTION', 'L · DOUBLE-CLICK WAVE'],
-  ['REFERENCE (UNTOUCHED SOURCE)', 'R'],
+  ['REFERENCE (UNTOUCHED SOURCE)', 'R · HOLD = MOMENTARY'],
   ['A/B SNAPSHOT SLOT', 'A'],
   ['EXPORT', 'E'],
   ['SAVE / OPEN PROJECT', 'CTRL+S / CTRL+O'],

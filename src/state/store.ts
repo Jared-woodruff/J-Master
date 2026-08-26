@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
-  ChainParams, FadeCurve, MacroValues, PRESETS, PLATFORMS,
+  ChainParams, FadeCurve, MacroValues, MonitorMode, PRESETS, PLATFORMS,
   defaultParams, defaultAdvEq, AdvEqBand, MATCH_EQ_CENTERS,
 } from '../audio/dsp/params';
 import {
@@ -294,6 +294,8 @@ interface JMasterState {
   fadeInCurve: FadeCurve;
   fadeOutCurve: FadeCurve;
   bypass: boolean;
+  /** Monitor matrix (preview-only): mono fold, side solo, or one channel. */
+  monitor: MonitorMode;
   limiterDelta: boolean;
   balanceDb: number;
   bassMono: boolean;
@@ -368,6 +370,7 @@ interface JMasterState {
   setFade(which: 'in' | 'out', sec: number): void;
   setFadeCurve(which: 'in' | 'out', curve: FadeCurve): void;
   setBypass(on: boolean): void;
+  setMonitor(mode: MonitorMode): void;
   setLimiterDelta(on: boolean): void;
   setBalance(db: number): void;
   autoCenter(): void;
@@ -490,6 +493,7 @@ export function chainParamsFrom(s: JMasterState): ChainParams {
     fadeOutCurve: s.fadeOutCurve,
     bypass: s.bypass,
     limiterDelta: s.limiterDelta,
+    monitor: s.monitor,
     smooth: s.macros.smooth,
     balanceDb: s.balanceDb,
     bassMono: s.bassMono,
@@ -621,6 +625,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     fadeOutCurve: 'smooth',
     bypass: false,
     limiterDelta: false,
+    monitor: 'stereo' as const,
     balanceDb: 0,
     bassMono: false,
     matchEqGains: [],
@@ -698,7 +703,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         set({
           loaded: true, loading: false, source, trackPath: path,
           playing: false, playheadSec: 0,
-          loopStartSec: null, loopEndSec: null,
+          loopStartSec: null, loopEndSec: null, monitor: 'stereo',
           tempo: null, balanceDb: 0, bassMono: false, metronome: false,
           diagIssues: issues, diagChecks: checks, diagOpen: false,
         });
@@ -1218,6 +1223,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     setBypass(on) {
       set({ bypass: on });
+      pushParams(get);
+    },
+
+    setMonitor(mode) {
+      set({ monitor: mode });
       pushParams(get);
     },
 

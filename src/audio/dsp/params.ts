@@ -1,6 +1,7 @@
 // The mastering console's parameter model, shared by UI, worklet and renderer.
 
 export type FadeCurve = 'linear' | 'smooth' | 'exp' | 'log';
+export type MonitorMode = 'stereo' | 'mono' | 'side' | 'left' | 'right';
 
 /** Fixed centres for the reference-match correction EQ. */
 export const MATCH_EQ_CENTERS = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
@@ -78,6 +79,9 @@ export interface ChainParams {
   bypass: boolean;
   /** Monitor only what the limiter is removing (preview only, never export). */
   limiterDelta: boolean;
+  /** Monitor matrix, applied by the worklet AFTER the chain (preview only,
+      never export): mono fold-down, side solo, or single channel. */
+  monitor: MonitorMode;
 
   /** Metronome click (preview only, mixed in post-metering by the worklet). */
   metronome: boolean;
@@ -119,6 +123,7 @@ export function defaultParams(): ChainParams {
     songLengthSec: 0,
     bypass: false,
     limiterDelta: false,
+    monitor: 'stereo',
     metronome: false,
     gridBpm: 0,
     gridFirstBeatSec: 0,

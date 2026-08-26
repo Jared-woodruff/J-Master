@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import { engine } from '../audio/engine';
 import { fadeGainAt } from '../audio/dsp/fades';
+import { palette } from '../lib/palette';
 
 const RULER_H = 20;
 const OVERVIEW_H = 11;
@@ -142,20 +143,43 @@ export function Waveform() {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    const css = () => getComputedStyle(document.documentElement);
+    // Skip frames when nothing observable moved: the signature covers every
+    // input the canvas draws from, so a paused, untouched console costs
+    // (almost) nothing per frame.
+    let prevSig: unknown[] = [];
 
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const st = useStore.getState();
       const wf = engine.waveform;
       if (!wf || w === 0) return;
-      const s = css();
-      const colWell = s.getPropertyValue('--surface-well').trim() || '#0A0B0D';
-      const colBar = s.getPropertyValue('--wave-bar').trim() || '#3D4248';
-      const colRms = s.getPropertyValue('--wave-rms').trim() || '#565B61';
-      const colSignal = s.getPropertyValue('--signal-500').trim() || '#FF4D00';
-      const colHair = s.getPropertyValue('--border-hairline').trim() || '#26292E';
-      const colSpec = s.getPropertyValue('--graphite-400').trim() || '#878D93';
+      const pal = palette();
+      const v0 = view.current;
+      const curSig: unknown[] = [
+        st.playheadSec, st.playing, v0.start, v0.end, hoverX.current, dragMode.current,
+        st.waveView, st.gridEnabled, st.loudnessLane, st.processedView, st.outSplit,
+        st.loopStartSec, st.loopEndSec, st.fadeInSec, st.fadeOutSec,
+        st.fadeInCurve, st.fadeOutCurve, st.targetLufs, st.tempo,
+        engine.processedPreview, engine.loudnessLane, specCanvas.current,
+        w, h, dpr, pal, wf,
+      ];
+      let same = prevSig.length === curSig.length;
+      if (same) {
+        for (let i = 0; i < curSig.length; i++) {
+          if (curSig[i] !== prevSig[i]) { same = false; break; }
+        }
+      }
+      if (same) return;
+      prevSig = curSig;
+      const hook = (window as any).__jmaster;
+      if (hook) hook.waveDraws = (hook.waveDraws | 0) + 1;
+
+      const colWell = pal.well;
+      const colBar = pal.bar;
+      const colRms = pal.rms;
+      const colSignal = pal.signal;
+      const colHair = pal.hair;
+      const colSpec = pal.spec;
 
       const d = st.source?.durationSec ?? 1;
       const v = view.current;

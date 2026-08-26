@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 interface KnobProps {
   label: string;
@@ -11,6 +11,8 @@ interface KnobProps {
   format: (v: number) => string;
   onChange: (v: number) => void;
   size?: number;
+  /** Display units per raw unit for typed entry (100 when shown as %). */
+  entryScale?: number;
 }
 
 const SWEEP = 270; // degrees, -135..+135
@@ -34,8 +36,16 @@ function arcPath(cx: number, cy: number, r: number, a0: number, a1: number): str
   return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} ${sweep} ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 
-export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format, onChange, size = 58 }: KnobProps) {
+export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format, onChange, size = 58, entryScale = 1 }: KnobProps) {
   const drag = useRef<{ startY: number; startVal: number } | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  const commitEntry = useCallback((text: string) => {
+    setEditing(false);
+    const parsed = parseFloat(text.replace(/[^\d.+-]/g, ''));
+    if (!Number.isFinite(parsed)) return;
+    onChange(clamp(parsed / entryScale, min, max));
+  }, [entryScale, min, max, onChange]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -116,7 +126,26 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
         {/* spindle: the Jamware square */}
         <rect x={c - 3} y={c - 3} width="6" height="6" fill={engaged ? 'var(--signal-500)' : 'var(--graphite-500)'} />
       </svg>
-      <span className="kvalue">{format(value)}</span>
+      {editing ? (
+        <input
+          className="kvalue-entry"
+          autoFocus
+          defaultValue={+(value * entryScale).toFixed(2)}
+          aria-label={`${label} value`}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => commitEntry(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitEntry(e.currentTarget.value);
+            else if (e.key === 'Escape') setEditing(false);
+          }}
+        />
+      ) : (
+        <span
+          className="kvalue"
+          title="Click to type a value"
+          onClick={() => setEditing(true)}
+        >{format(value)}</span>
+      )}
     </>
   );
 }

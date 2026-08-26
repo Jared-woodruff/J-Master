@@ -320,6 +320,17 @@ export class AudioEngine {
         sideBassRelDb: -60, harshRelDb: -60, corrMean: 1, corrWorst: 1,
       },
     };
+
+    // Prime the batch worker with the source once, so every processed-master
+    // preview after this costs a params message instead of a full-track copy.
+    {
+      const pl = new Float32Array(this.srcL);
+      const pr = new Float32Array(this.srcR);
+      this.ensureBatchWorker().postMessage(
+        { type: 'prime', l: pl.buffer, r: pr.buffer, fs: TARGET_RATE, sourceLufs: this.source.lufs },
+        [pl.buffer, pr.buffer],
+      );
+    }
     return this.source;
   }
 
@@ -577,21 +588,12 @@ export class AudioEngine {
       void (async () => {
         const worker = this.ensureBatchWorker();
         const reqId = ++this.batchReqSeq;
-        const l = new Float32Array(this.srcL!);
-        const r = new Float32Array(this.srcR!);
         const fullParams: ChainParams = { ...params, songLengthSec: this.source!.durationSec };
         const d: any = await new Promise((resolve) => {
           this.batchPending.set(reqId, { resolve });
-          worker.postMessage(
-            {
-              type: 'preview', reqId,
-              l: l.buffer, r: r.buffer, fs: TARGET_RATE,
-              params: fullParams, sourceLufs: this.source!.lufs,
-            },
-            [l.buffer, r.buffer],
-          );
+          worker.postMessage({ type: 'preview', reqId, params: fullParams });
         });
-        if (d.type === 'previewed') {
+        if (d.type === 'previewed' && !d.unprimed) {
           this.processedPreview = {
             spb: d.spb,
             mins: new Float32Array(d.mins),

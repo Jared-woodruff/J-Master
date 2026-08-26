@@ -26,6 +26,15 @@ export function App() {
   // L = loop section, R = reference, A = A/B slot, E = export, ? = keys,
   // Ctrl+S/O = save/open project, Ctrl+Z/Y = undo/redo.
   useEffect(() => {
+    // R: tap toggles the reference; holding it makes the compare momentary.
+    let rDownAt = 0;
+    let rRevertTo: boolean | null = null;
+    const onKeyUp = (e: KeyboardEvent) => {
+      if ((e.key === 'r' || e.key === 'R') && rRevertTo !== null) {
+        if (Date.now() - rDownAt > 350) useStore.getState().setBypass(rRevertTo);
+        rRevertTo = null;
+      }
+    };
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
       if (e.ctrlKey || e.metaKey) {
@@ -55,7 +64,11 @@ export function App() {
       } else if (e.key === 'l' || e.key === 'L') {
         if (s.loaded) s.toggleLoop();
       } else if (e.key === 'r' || e.key === 'R') {
-        if (s.loaded) s.setBypass(!s.bypass);
+        if (s.loaded && !e.repeat) {
+          rDownAt = Date.now();
+          rRevertTo = s.bypass;
+          s.setBypass(!s.bypass);
+        }
       } else if (e.key === 'a' || e.key === 'A') {
         if (s.loaded) s.switchSlot(s.activeSlot === 'A' ? 'B' : 'A');
       } else if (e.key === 'e' || e.key === 'E') {
@@ -65,7 +78,11 @@ export function App() {
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, []);
 
   // Double-clicked .jmaster files arrive from the main process.

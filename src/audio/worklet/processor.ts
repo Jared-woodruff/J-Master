@@ -154,6 +154,19 @@ class JMasterProcessor extends AudioWorkletProcessor {
     this.chain.processBlock(outL, outR, 0, n, start);
     this.playhead = pos;
 
+    // Monitor matrix (worklet-only, never in a render): fold or solo AFTER
+    // the chain, BEFORE metering, so the meters read what you hear.
+    const mon = this.params.monitor ?? 'stereo';
+    if (mon !== 'stereo') {
+      for (let i = 0; i < n; i++) {
+        const l = outL[i], r = outR[i];
+        if (mon === 'mono') { const m = 0.5 * (l + r); outL[i] = m; outR[i] = m; }
+        else if (mon === 'side') { const s = 0.5 * (l - r); outL[i] = s; outR[i] = s; }
+        else if (mon === 'left') { outR[i] = l; }
+        else { outL[i] = r; }
+      }
+    }
+
     // Metering on the processed output.
     this.meter.processBlock(outL, outR, 0, n);
     for (let i = 0; i < n; i++) {

@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- **Monitor matrix:** MONO / SIDE / L / R monitoring from the meters rack
+  for mono-compatibility and image checks. Applied after the chain and
+  before the meters (they read what you hear); never touches an export.
+- **Type a value:** click any console knob's readout to enter an exact
+  number.
+- **Hold R** for a momentary reference compare; a tap still toggles.
+- **Faster:** master-preview renders no longer copy the whole track on
+  every adjustment (the source is primed into the render worker once per
+  load); the waveform and spectrum repaint only when something actually
+  changed, with theme colours cached instead of queried every frame.
+  Idle CPU drops to near zero.
 - **Responsive layout.** The console now re-flows instead of clipping on
   narrow windows: track-strip actions wrap onto extra lines, the lower
   deck stacks (console full width, presets and meters side by side

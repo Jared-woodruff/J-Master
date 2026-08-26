@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import { engine } from '../audio/engine';
+import { palette } from '../lib/palette';
 
 const LUFS_MIN = -36;
 
@@ -15,10 +16,20 @@ function fmtLufs(v: number): string {
   return v <= -69 ? '—' : v.toFixed(1);
 }
 
+const MONITOR_MODES = [
+  { id: 'stereo', label: 'ST' },
+  { id: 'mono', label: 'MONO' },
+  { id: 'side', label: 'SIDE' },
+  { id: 'left', label: 'L' },
+  { id: 'right', label: 'R' },
+] as const;
+
 export function MetersPanel() {
   const meters = useStore((s) => s.meters);
   const targetLufs = useStore((s) => s.targetLufs);
   const ceilingDb = useStore((s) => s.ceilingDb);
+  const monitor = useStore((s) => s.monitor);
+  const setMonitor = useStore((s) => s.setMonitor);
   const [tpHold, setTpHold] = useState(-70);
 
   useEffect(() => {
@@ -41,6 +52,19 @@ export function MetersPanel() {
         <span className="spec">BS.1770-4</span>
       </div>
       <div className="meters-body">
+        <div className="seg mon-seg" role="group" aria-label="Monitor matrix">
+          {MONITOR_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              className={monitor === mode.id ? 'on' : ''}
+              title={mode.id === 'stereo'
+                ? 'Monitor the stereo master'
+                : `Monitor ${mode.id === 'mono' ? 'the mono fold-down' : mode.id === 'side' ? 'the side signal only' : `the ${mode.id} channel only`} (never exported)`}
+              onClick={() => setMonitor(mode.id)}
+            >{mode.label}</button>
+          ))}
+          <span className="spec monlabel">MON</span>
+        </div>
         <MeterLine label="M" value={m ? fmtLufs(m.momentary) : '—'} pct={m ? lufsPct(m.momentary) : 0} markPct={targetPct} accent />
         <MeterLine label="S" value={m ? fmtLufs(m.shortTerm) : '—'} pct={m ? lufsPct(m.shortTerm) : 0} markPct={targetPct} accent />
         <MeterLine label="I" value={m ? fmtLufs(m.integrated) : '—'} pct={m ? lufsPct(m.integrated) : 0} markPct={targetPct} accent />
@@ -142,16 +166,29 @@ function Spectrum() {
       return peak / 255;
     };
 
+    // Freeze the analyser painting shortly after playback stops: the FFT
+    // data is static then, so repainting it 60x/s is pure waste.
+    let idleFrames = 0;
+    let lastPal: unknown = null;
+    let lastW = 0, lastH = 0;
+
     const draw = () => {
       raf = requestAnimationFrame(draw);
       if (w === 0) return;
+      const pal = palette();
+      const playing = useStore.getState().playing;
+      if (!playing && idleFrames > 5 && pal === lastPal && w === lastW && h === lastH) return;
+      idleFrames = playing ? 0 : idleFrames + 1;
+      lastPal = pal;
+      lastW = w; lastH = h;
+      const hook = (window as any).__jmaster;
+      if (hook) hook.spectrumDraws = (hook.spectrumDraws | 0) + 1;
       const data = engine.readSpectrum();
       const pre = engine.readSpectrumPre();
-      const s = getComputedStyle(document.documentElement);
-      const colWell = s.getPropertyValue('--surface-well').trim() || '#0A0B0D';
-      const colHair = s.getPropertyValue('--border-hairline').trim() || '#26292E';
-      const colSignal = s.getPropertyValue('--signal-500').trim() || '#FF4D00';
-      const colSrc = s.getPropertyValue('--graphite-300').trim() || '#AFB3B8';
+      const colWell = pal.well;
+      const colHair = pal.hair;
+      const colSignal = pal.signal;
+      const colSrc = pal.src;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = colWell;

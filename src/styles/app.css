@@ -370,7 +370,17 @@
   .stemrow .stemhint { display: none; }
 }
 .knobcell .klabel { font-size: 10px; }
-.knobcell .kvalue { font-family: var(--font-mono); font-size: 12px; color: var(--text-body); }
+.knobcell .kvalue { font-family: var(--font-mono); font-size: 12px; color: var(--text-body); cursor: text; }
+.knobcell .kvalue:hover { color: var(--text-accent); }
+.kvalue-entry {
+  width: 56px;
+  height: 18px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: center;
+  border-radius: 0;
+}
 .knob-svg { cursor: ns-resize; touch-action: none; }
 
 .subrow { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr); gap: var(--space-3); align-items: stretch; }
@@ -473,6 +483,10 @@
 
 /* meters */
 .meters-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-4) var(--space-4); }
+.mon-seg { align-items: center; }
+.mon-seg button { flex: 1; padding: 0 4px; }
+.mon-seg button.on { background: var(--fill-accent); color: #fff; }
+.mon-seg .monlabel { padding: 0 7px; border-left: 1px solid var(--border-mid); font-size: 9px; }
 .meter-line { display: flex; align-items: center; gap: var(--space-2); }
 .meter-line .mlabel { width: 34px; flex: none; }
 .meter-line .mval { width: 52px; text-align: right; flex: none; font-family: var(--font-mono); font-size: 11.5px; }

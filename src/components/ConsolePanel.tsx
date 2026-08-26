@@ -72,42 +72,42 @@ export function ConsolePanel() {
         <div className="knobrow">
           <div className="knobcell">
             <Knob label="Tone" value={macros.tone} min={-1} max={1} defaultValue={0} bipolarFrom={0}
-              format={signedPct} onChange={(v) => setMacro('tone', v)} />
+              entryScale={100} format={signedPct} onChange={(v) => setMacro('tone', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>WARM ◂ ▸ BRIGHT</span>
           </div>
           <div className="knobcell">
             <Knob label="Shape" value={macros.shape} min={-1} max={1} defaultValue={0} bipolarFrom={0}
-              format={signedPct} onChange={(v) => setMacro('shape', v)} />
+              entryScale={100} format={signedPct} onChange={(v) => setMacro('shape', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>SCOOP ◂ ▸ FORWARD</span>
           </div>
           <div className="knobcell">
             <Knob label="Air" value={macros.air} min={0} max={1} defaultValue={0}
-              format={pct} onChange={(v) => setMacro('air', v)} />
+              entryScale={100} format={pct} onChange={(v) => setMacro('air', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>13 KHZ SHELF</span>
           </div>
           <div className="knobcell">
             <Knob label="Smooth" value={macros.smooth} min={0} max={1} defaultValue={0}
-              format={pct} onChange={(v) => setMacro('smooth', v)} />
+              entryScale={100} format={pct} onChange={(v) => setMacro('smooth', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>DE-HARSH HF</span>
           </div>
           <div className="knobcell">
             <Knob label="Character" value={macros.character} min={0} max={1} defaultValue={0}
-              format={pct} onChange={(v) => setMacro('character', v)} />
+              entryScale={100} format={pct} onChange={(v) => setMacro('character', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>HARMONIC DRIVE</span>
           </div>
           <div className="knobcell">
             <Knob label="Density" value={macros.density} min={0} max={1} defaultValue={0}
-              format={pct} onChange={(v) => setMacro('density', v)} />
+              entryScale={100} format={pct} onChange={(v) => setMacro('density', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>GLUE COMP</span>
           </div>
           <div className="knobcell">
             <Knob label="Impact" value={macros.impact} min={-1} max={1} defaultValue={0} bipolarFrom={0}
-              format={signedPct} onChange={(v) => setMacro('impact', v)} />
+              entryScale={100} format={signedPct} onChange={(v) => setMacro('impact', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>SOFT ◂ ▸ PUNCH</span>
           </div>
           <div className="knobcell">
             <Knob label="Width" value={macros.width} min={0} max={2} defaultValue={1} bipolarFrom={1}
-              format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setMacro('width', v)} />
+              entryScale={100} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setMacro('width', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>TILTED · BASS SAFE</span>
           </div>
         </div>
