@@ -321,15 +321,11 @@ export class AudioEngine {
       },
     };
 
-    // Prime the batch worker with the source once, so every processed-master
-    // preview after this costs a params message instead of a full-track copy.
-    {
-      const pl = new Float32Array(this.srcL);
-      const pr = new Float32Array(this.srcR);
-      this.ensureBatchWorker().postMessage(
-        { type: 'prime', l: pl.buffer, r: pr.buffer, fs: TARGET_RATE, sourceLufs: this.source.lufs },
-        [pl.buffer, pr.buffer],
-      );
+    // A previous track's preview source is stale now; release it in the
+    // worker. Re-priming happens lazily on the first preview request.
+    if (this.primedSource) {
+      this.batchWorker?.postMessage({ type: 'unprime' });
+      this.primedSource = null;
     }
     return this.source;
   }
@@ -578,6 +574,8 @@ export class AudioEngine {
   /** Notified whenever previewPending or processedPreview changes (UI mirror). */
   onPreviewUpdate: (() => void) | null = null;
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Which source the batch worker holds a primed preview copy of. */
+  private primedSource: SourceInfo | null = null;
 
   scheduleProcessedPreview(params: ChainParams, delayMs = 2000): void {
     if (!this.srcL || !this.srcR || !this.source) return;
@@ -587,6 +585,17 @@ export class AudioEngine {
     this.previewTimer = setTimeout(() => {
       void (async () => {
         const worker = this.ensureBatchWorker();
+        // Lazy prime: the worker caches the source only once previews are
+        // actually in use, so OUT-less sessions never pay the memory.
+        if (this.primedSource !== this.source) {
+          const pl = new Float32Array(this.srcL!);
+          const pr = new Float32Array(this.srcR!);
+          worker.postMessage(
+            { type: 'prime', l: pl.buffer, r: pr.buffer, fs: TARGET_RATE, sourceLufs: this.source!.lufs },
+            [pl.buffer, pr.buffer],
+          );
+          this.primedSource = this.source;
+        }
         const reqId = ++this.batchReqSeq;
         const fullParams: ChainParams = { ...params, songLengthSec: this.source!.durationSec };
         const d: any = await new Promise((resolve) => {

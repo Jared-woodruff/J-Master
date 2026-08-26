@@ -88,6 +88,11 @@ function prime(msg: PrimeMsg): void {
   primedLufs = msg.sourceLufs;
 }
 
+function unprime(): void {
+  primedL = null;
+  primedR = null;
+}
+
 interface PreviewMsg {
   type: 'preview';
   params: ChainParams;
@@ -175,7 +180,7 @@ function preview(msg: PreviewMsg): void {
 }
 
 self.onmessage = (e: MessageEvent) => {
-  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg | PrimeMsg;
+  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg | PrimeMsg | { type: 'unprime' };
   if (msg.type === 'analyze') analyze(msg);
   else if (msg.type === 'render') {
     void render(msg).catch((err) => {
@@ -186,6 +191,7 @@ self.onmessage = (e: MessageEvent) => {
   else if (msg.type === 'spectrogram') spectrogram(msg);
   else if (msg.type === 'tempo') tempo(msg);
   else if (msg.type === 'prime') prime(msg);
+  else if (msg.type === 'unprime') unprime();
   else if (msg.type === 'preview') preview(msg);
   else if (msg.type === 'profile') profile(msg);
 };
