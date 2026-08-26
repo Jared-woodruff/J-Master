@@ -24,33 +24,33 @@ export function MetaFields({ disabled }: { disabled: boolean }) {
 
   return (
     <>
-      <div className="drow">
-        <span className="spec" style={{ width: 64 }}>ARTIST</span>
+      <div className="formrow">
+        <span className="spec flabel">ARTIST</span>
         <input type="text" value={meta.artist} disabled={disabled} spellCheck={false}
           placeholder="artist" onChange={(e) => setMeta('artist', e.target.value)} />
-        <span className="spec" style={{ width: 52, textAlign: 'right' }}>ALBUM</span>
+        <span className="spec flabel r">ALBUM</span>
         <input type="text" value={meta.album} disabled={disabled} spellCheck={false}
           placeholder="album / EP" onChange={(e) => setMeta('album', e.target.value)} />
       </div>
-      <div className="drow">
-        <span className="spec" style={{ width: 64 }}>YEAR</span>
+      <div className="formrow">
+        <span className="spec flabel">YEAR</span>
         <input type="text" value={meta.year} disabled={disabled} spellCheck={false}
-          style={{ maxWidth: 72, flex: 'none' }} onChange={(e) => setMeta('year', e.target.value)} />
-        <span className="spec" style={{ width: 46, textAlign: 'right' }}>GENRE</span>
+          style={{ width: 72, flex: 'none' }} onChange={(e) => setMeta('year', e.target.value)} />
+        <span className="spec flabel r">GENRE</span>
         <input type="text" value={meta.genre} disabled={disabled} spellCheck={false}
-          placeholder="genre" onChange={(e) => setMeta('genre', e.target.value)} />
-        <span className="spec" style={{ width: 52, textAlign: 'right' }}>CAT. NO</span>
+          placeholder="genre" style={{ minWidth: 90 }} onChange={(e) => setMeta('genre', e.target.value)} />
+        <span className="spec flabel r">CAT. NO</span>
         <input type="text" value={meta.catalog} disabled={disabled} spellCheck={false}
-          placeholder="JW-001" style={{ maxWidth: 110, flex: 'none' }}
+          placeholder="JW-001" style={{ width: 96, flex: 'none' }}
           onChange={(e) => setMeta('catalog', e.target.value)} />
       </div>
-      <div className="drow" style={{ alignItems: 'flex-start' }}>
-        <span className="spec" style={{ width: 64, paddingTop: 4 }}>COVER</span>
+      <div className="formrow">
+        <span className="spec flabel">COVER</span>
         <button
           className={`cover-tile ${coverArt ? 'has' : ''}`}
           disabled={disabled}
           title={coverArt
-            ? `${coverArt.name} · ${coverArt.width}×${coverArt.height} · click to replace`
+            ? `${coverArt.name} · click to replace`
             : 'Add front-cover art (embedded in the exported file’s tags)'}
           onClick={() => fileRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
@@ -64,15 +64,20 @@ export function MetaFields({ disabled }: { disabled: boolean }) {
           {coverUrl ? <img src={coverUrl} alt="Cover art" /> : <span className="spec">+ ART</span>}
         </button>
         <div className="cover-info">
-          <span className="spec" style={{ whiteSpace: 'normal' }}>
+          <span className="line1">
             {coverArt
-              ? `${coverArt.width}×${coverArt.height} JPEG · ${Math.max(1, Math.round(coverArt.data.length / 1024))} KB · EMBEDDED IN THE FILE TAGS`
-              : 'CLICK OR DROP AN IMAGE · EMBEDDED IN WAV / FLAC / MP3 / OPUS TAGS'}
+              ? `${coverArt.width} × ${coverArt.height} JPEG · ${Math.max(1, Math.round(coverArt.data.length / 1024))} KB`
+              : 'ADD FRONT-COVER ART'}
           </span>
-          {coverArt && (
-            <button className="btn btn-sm btn-ghost" disabled={disabled} onClick={clearCover}>CLEAR</button>
-          )}
+          <span className="spec line2">
+            {coverArt
+              ? 'EMBEDDED IN EVERY EXPORT FORMAT'
+              : 'CLICK OR DROP AN IMAGE · SCALED TO 1000 PX JPEG'}
+          </span>
         </div>
+        {coverArt && (
+          <button className="btn btn-sm btn-ghost" disabled={disabled} onClick={clearCover}>CLEAR</button>
+        )}
         <input
           ref={fileRef}
           type="file"

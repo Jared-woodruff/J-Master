@@ -56,7 +56,7 @@ export function ExportDialog() {
         openExport(false);
       }
     }}>
-      <div className="dialog frame" role="dialog" aria-label="Export master">
+      <div className="dialog frame" role="dialog" aria-label="Export master" style={{ width: 560 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
@@ -67,8 +67,8 @@ export function ExportDialog() {
 
         {!stats && (
           <>
-            <div className="drow">
-              <span className="spec" style={{ width: 64 }}>FILE</span>
+            <div className="formrow">
+              <span className="spec flabel">FILE</span>
               <input
                 type="text"
                 value={fileName}
@@ -77,8 +77,8 @@ export function ExportDialog() {
                 spellCheck={false}
               />
             </div>
-            <div className="drow">
-              <span className="spec" style={{ width: 64 }}>TITLE</span>
+            <div className="formrow">
+              <span className="spec flabel">TITLE</span>
               <input
                 type="text"
                 value={title}
@@ -87,34 +87,45 @@ export function ExportDialog() {
                 spellCheck={false}
               />
             </div>
+
+            <div className="boxlabel" style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 10 }}>
+              <span className="spec" style={{ color: 'var(--text-body)' }}>RELEASE</span>
+              <span className="spec">WRITTEN TO FILE TAGS</span>
+            </div>
             <MetaFields disabled={busy} />
-            <div className="drow">
-              <span className="spec" style={{ width: 64 }}>FORMAT</span>
-              <div className="seg">
+
+            <div className="boxlabel" style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 10 }}>
+              <span className="spec" style={{ color: 'var(--text-body)' }}>FORMAT</span>
+              <span className="spec">
+                {format === 'wav' ? 'PCM · TPDF DITHER'
+                  : format === 'flac' ? 'LOSSLESS · RFC 9639'
+                  : format === 'mp3' ? 'CBR · ID3V2.3'
+                  : 'OGG OPUS · RFC 7845'}
+              </span>
+            </div>
+            <div className="formrow">
+              <div className="seg grow" style={{ flex: 1.4 }} role="group" aria-label="Format">
                 <button className={format === 'wav' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('wav')}>WAV</button>
                 <button className={format === 'flac' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('flac')}>FLAC</button>
                 <button className={format === 'mp3' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('mp3')}>MP3</button>
                 <button className={format === 'opus' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('opus')}>OPUS</button>
               </div>
               {format === 'wav' || format === 'flac' ? (
-                <>
-                  <div className="seg">
-                    <button className={bitDepth === 24 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(24)}>24 BIT</button>
-                    <button className={bitDepth === 16 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(16)}>16 BIT</button>
-                  </div>
-                  <span className="spec">{format === 'flac' ? 'LOSSLESS' : 'TPDF DITHER'}</span>
-                </>
+                <div className="seg grow" role="group" aria-label="Bit depth">
+                  <button className={bitDepth === 24 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(24)}>24 BIT</button>
+                  <button className={bitDepth === 16 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(16)}>16 BIT</button>
+                </div>
               ) : format === 'mp3' ? (
-                <div className="seg">
-                  <button className={mp3Kbps === 320 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(320)}>320</button>
-                  <button className={mp3Kbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(256)}>256</button>
-                  <button className={mp3Kbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(192)}>192</button>
+                <div className="seg grow" role="group" aria-label="Bitrate">
+                  <button className={mp3Kbps === 320 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(320)}>320K</button>
+                  <button className={mp3Kbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(256)}>256K</button>
+                  <button className={mp3Kbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(192)}>192K</button>
                 </div>
               ) : (
-                <div className="seg">
-                  <button className={opusKbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(256)}>256</button>
-                  <button className={opusKbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(192)}>192</button>
-                  <button className={opusKbps === 128 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(128)}>128</button>
+                <div className="seg grow" role="group" aria-label="Bitrate">
+                  <button className={opusKbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(256)}>256K</button>
+                  <button className={opusKbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(192)}>192K</button>
+                  <button className={opusKbps === 128 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(128)}>128K</button>
                 </div>
               )}
             </div>
@@ -153,14 +164,15 @@ export function ExportDialog() {
         )}
 
         {!stats && !busy && (format === 'mp3' || format === 'opus') && (
-          <div className="drow">
-            <span className="spec" style={{ width: 64 }}>AUDITION</span>
+          <div className="formrow">
+            <span className="spec flabel">AUDITION</span>
             {!audition.active ? (
               <>
                 <button className="btn btn-sm btn-secondary" disabled={audition.busy}
                   onClick={() => void startAudition()}>
                   {audition.busy ? 'RENDERING…' : '▸ HEAR THE CODEC'}
                 </button>
+                <span className="leader" />
                 <span className="spec" style={{ overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
                   LOUDEST-SECTION A/B
                 </span>
@@ -176,6 +188,7 @@ export function ExportDialog() {
                     onClick={() => setAuditionMode('master')}>MASTER</button>
                 </div>
                 <button className="btn btn-sm btn-ghost" onClick={stopAudition}>■ STOP</button>
+                <span className="leader" />
                 <span className="lamp signal" />
               </>
             )}
