@@ -1,199 +1,83 @@
-// Captures README screenshots by driving the built app over CDP. dist/ is
-// served over a local HTTP server so the demo track is fetchable.
-// Prereq: `npm run build`, plus a track at dist/test-song.wav.
-// Usage: node scripts/capture-screens.mjs
-import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { createServer } from 'node:http';
-import { join, extname } from 'node:path';
-import electronPath from 'electron';
+// Captures the README screenshots from the built app, playing the demo
+// track (scripts/make-demo-song.mjs), with the same driver as the GIFs
+// (scripts/lib/drive-app.mjs): production build, throwaway profile, muted.
+//
+// Prereq: `npm run build`.
+// Usage:  node scripts/capture-screens.mjs
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { launchApp, settle, sleep, waitForAnalysis } from './lib/drive-app.mjs';
 
 const OUT = 'docs/screenshots';
 mkdirSync(OUT, { recursive: true });
-const port = 9227;
-const httpPort = 5197;
+const work = mkdtempSync(join(tmpdir(), 'jmaster-screens-'));
+const song = join(work, 'midnight-static.wav');
+execFileSync(process.execPath, ['scripts/make-demo-song.mjs', song], { stdio: 'inherit' });
 
-const MIME = {
-  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
-  '.wav': 'audio/wav', '.svg': 'image/svg+xml', '.woff2': 'font/woff2',
-  '.png': 'image/png', '.ico': 'image/x-icon',
-};
-const server = createServer((req, res) => {
-  const url = (req.url ?? '/').split('?')[0];
-  const path = join('dist', url === '/' ? 'index.html' : url.slice(1));
-  if (!existsSync(path)) { res.writeHead(404); res.end(); return; }
-  res.writeHead(200, { 'Content-Type': MIME[extname(path)] ?? 'application/octet-stream' });
-  res.end(readFileSync(path));
-});
-server.listen(httpPort);
-
-const child = spawn(electronPath, ['.', `--remote-debugging-port=${port}`], {
-  stdio: 'ignore',
-  env: { ...process.env, VITE_DEV_SERVER_URL: `http://localhost:${httpPort}` },
-});
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-let target = null;
-for (let i = 0; i < 60; i++) {
-  await sleep(500);
-  try {
-    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    target = list.find((t) => t.type === 'page' && t.url.includes(`localhost:${httpPort}`));
-    if (target) break;
-  } catch { /* booting */ }
-}
-if (!target) {
-  console.error('no page target');
-  child.kill();
-  process.exit(1);
-}
-
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-let seq = 0;
-const pending = new Map();
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.id && pending.has(msg.id)) {
-    pending.get(msg.id)(msg);
-    pending.delete(msg.id);
-  }
-};
-const send = (method, params = {}) => {
-  const id = ++seq;
-  ws.send(JSON.stringify({ id, method, params }));
-  return new Promise((res) => pending.set(id, res));
-};
-const evalJs = async (expr) => {
-  const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-  if (r.result?.exceptionDetails) console.error('eval error:', JSON.stringify(r.result.exceptionDetails).slice(0, 300));
-  return r.result?.result?.value;
-};
-const shoot = async (name) => {
-  await sleep(700);
-  const r = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/${name}.png`, Buffer.from(r.result.data, 'base64'));
+const app = await launchApp({ width: 1440, height: 900 });
+const shoot = async (name, { cursor = false } = {}) => {
+  if (!cursor) await app.hideCursor();
+  await sleep(450);
+  writeFileSync(join(OUT, `${name}.png`), await app.screenshot());
   console.log(`captured ${name}`);
 };
-// Wait for the master preview to finish rendering and toasts to clear, and
-// require 3 s of continuous quiet (the preview re-render debounce is 2 s),
-// so no shot catches the console mid-update.
-const settle = () => evalJs(`(async () => {
-  const eng = window.__jmaster.engine;
-  let stable = 0;
-  for (let i = 0; i < 240 && stable < 12; i++) {
-    const s = window.__jmaster.store.getState();
-    if (!eng.previewPending && s.toasts.length === 0) stable++; else stable = 0;
-    await new Promise(r => setTimeout(r, 250));
-  }
-  return 'settled';
-})()`);
+const waitPreview = () => app.eval(`(async () => { const eng = window.__jmaster.engine;
+  for (let i = 0; i < 300; i++) { if (eng.processedPreview && !eng.previewPending) return; await new Promise(r => setTimeout(r, 100)); } })()`);
 
-await send('Page.enable');
-await sleep(2500);
+try {
+  const dz = await app.box('.dropzone');
+  await app.dropFiles([song], dz.x, dz.y, { ms: 150 });
+  await waitForAnalysis(app);
 
-// Load the test track and settle.
-await evalJs(`(async () => {
-  const r = await fetch('/test-song.wav');
-  const ab = await r.arrayBuffer();
-  await window.__jmaster.store.getState().loadFile(ab, 'midnight-static.wav');
-  const st = window.__jmaster.store.getState();
-  st.openDiag(false);
-  st.applyPreset('synthwave');
-  for (let i = 0; i < 40; i++) { await new Promise(r2 => setTimeout(r2, 250)); if (st.tempo || window.__jmaster.store.getState().tempo) break; }
-  // SPLIT compare in the hero shot: source above, master below.
-  const st3 = window.__jmaster.store.getState();
-  st3.setProcessedView(true);
-  st3.setOutSplit(true);
-  const eng = window.__jmaster.engine;
-  for (let i = 0; i < 120; i++) { await new Promise(r2 => setTimeout(r2, 250)); if (eng.processedPreview && !eng.previewPending) break; }
-  window.__jmaster.store.getState().seekSec(13.2);
-  return 'ok';
-})()`);
-await sleep(1500);
-await settle();
-await shoot('01-console');
+  // The console, playing, with SPLIT compare: source above, master below.
+  await app.store(`(st().applyPreset('synthwave'), st().setProcessedView(true), st().setOutSplit(true), 1)`);
+  await waitPreview();
+  await settle(app);
+  await app.store(`(st().seekSec(55.2), st().togglePlay(), 1)`);
+  await sleep(2600);
+  await shoot('01-console');
 
-// Spectrogram + grid, zoomed.
-await evalJs(`(async () => {
-  const st = window.__jmaster.store.getState();
-  st.setWaveView('spec');
-  for (let i = 0; i < 40; i++) { await new Promise(r2 => setTimeout(r2, 250)); if (window.__jmaster.engine.spectrogram) break; }
-  const canvas = document.querySelector('.waveframe canvas');
-  const rc = canvas.getBoundingClientRect();
-  for (let i = 0; i < 3; i++) {
-    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: rc.left + rc.width * 0.4, clientY: rc.top + rc.height / 2, bubbles: true, cancelable: true }));
-    await new Promise(r2 => setTimeout(r2, 80));
-  }
-  return 'ok';
-})()`);
-await settle();
-await shoot('02-spectrogram');
+  // Spectrogram, zoomed in around the first drop.
+  await app.store(`(st().togglePlay(), st().setOutSplit(false), st().setProcessedView(false), st().setWaveView('spec'), st().seekSec(17.2), 1)`);
+  await app.eval(`(async () => { for (let i = 0; i < 100 && !window.__jmaster.engine.spectrogram; i++) await new Promise(r => setTimeout(r, 100)); })()`);
+  const canvas = await app.box('.waveframe canvas');
+  await app.wheel(canvas.left + canvas.width * 0.22, canvas.y, -100, 3);
+  await settle(app);
+  await shoot('02-spectrogram');
 
-// Advanced EQ drawer with a curve.
-await evalJs(`(() => {
-  const st = window.__jmaster.store.getState();
-  st.setWaveView('wave');
-  st.setAdvEqOpen(true);
-  st.setAdvBand(1, { gainDb: -2.5 });
-  st.setAdvBand(3, { gainDb: 3, freq: 3200, q: 1.4 });
-  st.setAdvBand(5, { gainDb: 2 });
-  return 'ok';
-})()`);
-await settle();
-await shoot('03-adv-eq');
+  // The advanced EQ drawer with a curve over the live spectrum.
+  await app.store(`(st().setWaveView('wave'), st().setAdvEqOpen(true),
+    st().setAdvBand(1, { gainDb: -2.5 }), st().setAdvBand(3, { gainDb: 3, freq: 3200, q: 1.4 }), st().setAdvBand(5, { gainDb: 2 }),
+    st().seekSec(20), st().togglePlay(), 1)`);
+  await sleep(2400);
+  await shoot('03-adv-eq');
 
-// Diagnosis sheet.
-await evalJs(`(() => {
-  const st = window.__jmaster.store.getState();
-  st.setAdvEqOpen(false);
-  st.openDiag(true);
-  return 'ok';
-})()`);
-await settle();
-await shoot('04-diagnosis');
+  // The diagnosis sheet.
+  await app.store(`(st().togglePlay(), st().setAdvEqOpen(false), st().openDiag(true), 1)`);
+  await settle(app, 800);
+  await shoot('04-diagnosis');
 
-// Paper theme.
-await evalJs(`(() => {
-  const st = window.__jmaster.store.getState();
-  st.openDiag(false);
-  st.setTheme('paper');
-  return 'ok';
-})()`);
-await settle();
-await shoot('05-paper');
+  // PAPER, the light theme.
+  await app.store(`(st().openDiag(false), st().setTheme('paper'), st().seekSec(56), st().togglePlay(), 1)`);
+  await sleep(2400);
+  await shoot('05-paper');
 
-// Export dialog, with cover art set so the COVER row shows its thumbnail.
-await evalJs(`(async () => {
-  const st = window.__jmaster.store.getState();
-  st.setTheme('plate');
-  st.setExportFormat('opus');
-  st.setMeta('artist', 'Neon Circuit');
-  st.setMeta('album', 'Midnight Static EP');
-  st.setMeta('catalog', 'JW-014');
-  const cv = document.createElement('canvas');
-  cv.width = 1000; cv.height = 1000;
-  const g = cv.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 1000, 1000);
-  grad.addColorStop(0, '#FF4D00'); grad.addColorStop(1, '#17191C');
-  g.fillStyle = grad; g.fillRect(0, 0, 1000, 1000);
-  g.fillStyle = '#0D0E10'; g.fillRect(70, 70, 860, 860);
-  g.fillStyle = '#FBFAF7';
-  g.font = '900 150px sans-serif';
-  g.fillText('MIDNIGHT', 120, 480);
-  g.fillText('STATIC', 120, 650);
-  g.fillStyle = '#FF4D00'; g.fillRect(120, 700, 240, 22);
-  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
-  await st.setCoverFromFile(new File([blob], 'midnight-static-cover.png', { type: 'image/png' }));
-  window.__jmaster.store.getState().openExport(true);
-  return 'ok';
-})()`);
-await settle();
-await shoot('06-export');
+  // Four tracks dragged over the loaded console: they will queue in BATCH.
+  await app.store(`(st().togglePlay(), st().setTheme('plate'), 1)`);
+  await settle(app, 800);
+  const names = ['01 midnight-static', '02 neon-arcade', '03 last-train-home', '04 afterglow'];
+  const files = names.map((n) => { const p = join(work, `${n}.wav`); copyFileSync(song, p); return p; });
+  const x = app.width * 0.56, y = app.height * 0.58;
+  const cancel = await app.hoverFiles(files, x, y);
+  await app.eval(`(window.__demo.ghost('<span class="ic">WAV</span>4 files<span class="badge">+ COPY</span>'), window.__demo.place(${x}, ${y}))`);
+  await shoot('06-drop', { cursor: true });
+  await cancel();
 
-await evalJs(`window.__jmaster.store.getState().openExport(false); 'ok'`);
-ws.close();
-child.kill();
-server.close();
+  if (app.problems.length) console.log('page problems:\n  ' + app.problems.join('\n  '));
+} finally {
+  await app.close();
+  rmSync(work, { recursive: true, force: true });
+}
 console.log('done');
-process.exit(0);

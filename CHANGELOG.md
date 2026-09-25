@@ -68,6 +68,10 @@
   settings are active. Track specs wrap instead of clipping mid-word,
   knob captions fit whole, the spectrum has frequency labels, and toasts
   cap at three.
+- **A new README.** Animated banners set in the app's own typefaces, GIFs
+  of the features recorded from the running app, and fresh screenshots.
+  All of it regenerates from scripts that drive the production build with
+  real input on a throwaway profile, playing a synthesized demo track.
 
 ## 2.4.0
 - Long track names, artists, and genres can no longer overflow any

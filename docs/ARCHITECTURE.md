@@ -145,5 +145,11 @@ preload exposes a narrow typed bridge.
 `window.__jmaster` exposes `{ store, engine, chainParams, flac }`. The
 development flow drives the real app through it: loading synthetic tracks
 with known ground truth (exact BPM, known spectral content, deliberately
-broken stereo) and measuring rendered output. `scripts/capture-screens.mjs`
-uses the same hook over CDP to produce the README screenshots.
+broken stereo) and measuring rendered output.
+
+The README media come from the same hook. `scripts/lib/drive-app.mjs`
+launches the production build over CDP on a throwaway profile with audio
+muted and operates it with real input (OS-style file drops, mouse moves,
+clicks, drags, keys); `scripts/capture-screens.mjs` and
+`scripts/capture-media.mjs` use it to shoot the screenshots and record the
+GIFs while playing the demo track from `scripts/make-demo-song.mjs`.
