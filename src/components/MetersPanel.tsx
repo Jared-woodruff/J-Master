@@ -2,9 +2,10 @@
 // over-lamp, compressor & limiter gain reduction, stereo correlation, and a
 // live spectrum analyser.
 import { useEffect, useRef, useState } from 'react';
-import { useStore } from '../state/store';
+import { useStore, normPreviewGainDb } from '../state/store';
 import { engine } from '../audio/engine';
 import { palette } from '../lib/palette';
+import { PLATFORMS } from '../audio/dsp/params';
 
 const LUFS_MIN = -36;
 
@@ -15,6 +16,15 @@ function lufsPct(v: number): number {
 function fmtLufs(v: number): string {
   return v <= -69 ? '—' : v.toFixed(1);
 }
+
+// Distinct normalization behaviours: -14 turn-down (Spotify, YouTube) and
+// Apple's -16.
+const NORM_PLATFORMS = [
+  { id: null, label: 'OFF', name: '' },
+  { id: 'spotify', label: 'SPOTIFY', name: 'Spotify' },
+  { id: 'apple', label: 'APPLE', name: 'Apple Music' },
+  { id: 'youtube', label: 'YOUTUBE', name: 'YouTube' },
+] as const;
 
 const MONITOR_MODES = [
   { id: 'stereo', label: 'ST' },
@@ -30,6 +40,9 @@ export function MetersPanel() {
   const ceilingDb = useStore((s) => s.ceilingDb);
   const monitor = useStore((s) => s.monitor);
   const setMonitor = useStore((s) => s.setMonitor);
+  const normPreview = useStore((s) => s.normPreview);
+  const setNormPreview = useStore((s) => s.setNormPreview);
+  const normGainDb = useStore(normPreviewGainDb);
   const [tpHold, setTpHold] = useState(-70);
 
   useEffect(() => {
@@ -65,6 +78,30 @@ export function MetersPanel() {
           ))}
           <span className="spec monlabel">MON</span>
         </div>
+        <div className="seg mon-seg" role="group" aria-label="Hear it as a streaming platform plays it">
+          {NORM_PLATFORMS.map((p) => {
+            const plat = p.id ? PLATFORMS.find((x) => x.id === p.id) : null;
+            const turn = plat ? Math.min(0, plat.targetLufs - targetLufs) : 0;
+            return (
+              <button
+                key={p.label}
+                className={normPreview === p.id ? 'on' : ''}
+                title={plat
+                  ? `Hear it as ${p.name} plays it: ${turn < 0 ? `turned down ${Math.abs(turn).toFixed(1)} dB to ${plat.targetLufs} LUFS` : 'plays as mastered'} · playback only, never exported`
+                  : 'Hear the master at its own level'}
+                onClick={() => setNormPreview(p.id)}
+              >{p.label}</button>
+            );
+          })}
+          <span className="spec monlabel" title="Loudness-normalization preview">NORM</span>
+        </div>
+        {normPreview && (
+          <div className="spec normnote">
+            {normGainDb < -0.05
+              ? <>PLAYBACK TURNED DOWN <span style={{ color: 'var(--text-accent)' }}>{Math.abs(normGainDb).toFixed(1)} DB</span></>
+              : 'PLAYS AS MASTERED AT THIS TARGET'}
+          </div>
+        )}
         <MeterLine label="M" value={m ? fmtLufs(m.momentary) : '—'} pct={m ? lufsPct(m.momentary) : 0} markPct={targetPct} accent />
         <MeterLine label="S" value={m ? fmtLufs(m.shortTerm) : '—'} pct={m ? lufsPct(m.shortTerm) : 0} markPct={targetPct} accent />
         <MeterLine label="I" value={m ? fmtLufs(m.integrated) : '—'} pct={m ? lufsPct(m.integrated) : 0} markPct={targetPct} accent />

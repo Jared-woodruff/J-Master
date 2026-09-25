@@ -589,12 +589,16 @@
   font-weight: 600;
 }
 
-/* meters */
-.meters-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-4) var(--space-4); }
-.mon-seg { align-items: center; }
-.mon-seg button { flex: 1; padding: 0 4px; }
+/* meters: rows never squash; a short column scrolls instead of clipping */
+.meters-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 var(--space-4) var(--space-4); overflow-y: auto; }
+.meters-body > * { flex-shrink: 0; }
+.mon-seg { align-items: center; height: 24px; }
+/* Content-sized: SPOTIFY and YOUTUBE need more room than OFF or L. */
+.mon-seg button { flex: 1 1 auto; padding: 0 4px; }
 .mon-seg button.on { background: var(--fill-accent); color: #fff; }
 .mon-seg .monlabel { padding: 0 7px; border-left: 1px solid var(--border-mid); font-size: 9px; }
+.mon-seg button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.normnote { font-size: 9.5px; margin-top: -2px; overflow: hidden; text-overflow: ellipsis; }
 .meter-line { display: flex; align-items: center; gap: var(--space-2); }
 .meter-line .mlabel { width: 34px; flex: none; }
 .meter-line .mval { width: 52px; text-align: right; flex: none; font-family: var(--font-mono); font-size: 11.5px; }
@@ -610,8 +614,8 @@
 .meter-fill.accent { background: var(--signal-500); }
 .meter-fill.warn { background: var(--warn-500); }
 .meter-mark { position: absolute; top: -1px; bottom: -1px; width: 1px; background: var(--paper); opacity: 0.7; }
-.meter-sep { border-top: 1px solid var(--border-hairline); margin: var(--space-1) 0; }
-.spectrum-wrap { flex: 1; min-height: 90px; position: relative; border: 1px solid var(--border-hairline); background: var(--surface-well); }
+.meter-sep { border-top: 1px solid var(--border-hairline); margin: 2px 0; }
+.spectrum-wrap { flex: 1 0 90px; min-height: 90px; position: relative; border: 1px solid var(--border-hairline); background: var(--surface-well); }
 .spectrum-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 /* ── empty state ────────────────────────────────────────────────────── */

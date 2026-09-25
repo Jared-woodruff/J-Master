@@ -391,6 +391,8 @@ interface JMasterState {
   bypass: boolean;
   /** Monitor matrix (preview-only): mono fold, side solo, or one channel. */
   monitor: MonitorMode;
+  /** Platform whose loudness normalization playback imitates (null = off). */
+  normPreview: string | null;
   limiterDelta: boolean;
   balanceDb: number;
   bassMono: boolean;
@@ -468,6 +470,7 @@ interface JMasterState {
   setFadeCurve(which: 'in' | 'out', curve: FadeCurve): void;
   setBypass(on: boolean): void;
   setMonitor(mode: MonitorMode): void;
+  setNormPreview(platformId: string | null): void;
   setLimiterDelta(on: boolean): void;
   setBalance(db: number): void;
   autoCenter(): void;
@@ -612,6 +615,7 @@ export function chainParamsFrom(s: JMasterState): ChainParams {
     bypass: s.bypass,
     limiterDelta: s.limiterDelta,
     monitor: s.monitor,
+    monitorGainDb: normPreviewGainDb(s),
     smooth: s.macros.smooth,
     balanceDb: s.balanceDb,
     bassMono: s.bassMono,
@@ -626,6 +630,18 @@ export function chainParamsFrom(s: JMasterState): ChainParams {
     // Click counts beats from the first bar so accents land on downbeats.
     gridFirstBeatSec: s.tempo?.firstBarSec ?? s.tempo?.firstBeatSec ?? 0,
   };
+}
+
+/**
+ * Playback gain that imitates a platform's loudness normalization: a master
+ * louder than the platform's reference is turned down by the difference.
+ * Quieter masters play as mastered (the turn-down-only model the DIAG
+ * delivery table uses; boosting depends on each service's peak rules).
+ */
+export function normPreviewGainDb(s: { normPreview: string | null; targetLufs: number }): number {
+  if (!s.normPreview) return 0;
+  const p = PLATFORMS.find((x) => x.id === s.normPreview);
+  return p ? Math.min(0, p.targetLufs - s.targetLufs) : 0;
 }
 
 function pushParams(get: () => JMasterState): void {
@@ -751,6 +767,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     bypass: false,
     limiterDelta: false,
     monitor: 'stereo' as const,
+    normPreview: null,
     balanceDb: 0,
     bassMono: false,
     matchEqGains: [],
@@ -1429,6 +1446,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     setBypass(on) {
       set({ bypass: on });
+      pushParams(get);
+    },
+
+    setNormPreview(platformId) {
+      set({ normPreview: platformId });
       pushParams(get);
     },
 

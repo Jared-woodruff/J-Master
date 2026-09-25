@@ -31,6 +31,14 @@
 - The waveform's view controls moved to a header row above the canvas.
   They no longer cover the fade-out handle (it can be dragged again at
   any zoom), and section labels no longer print through the source line.
+- **Hear it as the platforms play it.** A NORM row under MON turns
+  playback down exactly as Spotify, Apple Music or YouTube would at your
+  loudness target, so a louder master and a more dynamic one can be
+  compared at the level listeners actually hear. Playback only: the
+  meters keep reading the master and exports are untouched.
+- Fix: the meters rack squashed its rows when space ran short, clipping
+  text and the spectrum. It now scrolls instead, and fits without
+  scrolling at the default window size.
 - **Your own presets.** + SAVE in the preset rack stores the console
   (macros, target, ceiling, genre) under your name; your presets list
   above the genres, persist between sessions, and can be picked per

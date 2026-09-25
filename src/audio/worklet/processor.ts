@@ -25,6 +25,7 @@ class JMasterProcessor extends AudioWorkletProcessor {
   private playhead = 0;
   private loopStart = -1;
   private loopEnd = -1;   // loop active when loopEnd > loopStart >= 0
+  private normGain = 1;   // current platform-preview gain (linear, ramped)
   private params: ChainParams = defaultParams();
   private meterCountdown = METER_INTERVAL;
   private framePeak = 0;
@@ -183,6 +184,23 @@ class JMasterProcessor extends AudioWorkletProcessor {
     if (this.playhead >= total && written < n) {
       this.playing = false;
       this.port.postMessage({ type: 'ended' });
+    }
+
+    // Platform-normalization preview: playback level only, after the
+    // meters (they keep reading the master), and on the "before" feed too
+    // so the spectrum compare stays level. Ramped per block: no clicks.
+    const normTarget = dbToLin(Math.min(0, this.params.monitorGainDb ?? 0));
+    if (normTarget !== 1 || this.normGain !== 1) {
+      const g0 = this.normGain;
+      const step = (normTarget - g0) / n;
+      const scalePre = preL && preR && preL !== preR;
+      for (let i = 0; i < n; i++) {
+        const g = g0 + step * (i + 1);
+        outL[i] *= g;
+        outR[i] *= g;
+        if (scalePre) { preL![i] *= g; preR![i] *= g; }
+      }
+      this.normGain = normTarget;
     }
 
     // Metronome: mixed in after every meter tap so readings stay honest.

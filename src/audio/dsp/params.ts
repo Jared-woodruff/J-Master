@@ -82,6 +82,9 @@ export interface ChainParams {
   /** Monitor matrix, applied by the worklet AFTER the chain (preview only,
       never export): mono fold-down, side solo, or single channel. */
   monitor: MonitorMode;
+  /** Playback-only gain the worklet applies after metering, to hear the
+      master at a streaming platform's normalized level (0 = off). */
+  monitorGainDb: number;
 
   /** Metronome click (preview only, mixed in post-metering by the worklet). */
   metronome: boolean;
@@ -124,6 +127,7 @@ export function defaultParams(): ChainParams {
     bypass: false,
     limiterDelta: false,
     monitor: 'stereo',
+    monitorGainDb: 0,
     metronome: false,
     gridBpm: 0,
     gridFirstBeatSec: 0,
