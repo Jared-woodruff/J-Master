@@ -34,6 +34,28 @@
   .titlebar .rev { display: none; }
 }
 .titlebar-spacer { flex: 1; }
+.titlemenu {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-hairline);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.titlemenu button {
+  height: 26px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
+}
+.titlemenu button:hover { background: var(--surface-inset); color: var(--text-body); }
+.titlemenu button:active { transform: translateY(var(--press-shift)); }
 .titlebar .rev { margin-right: var(--space-3); }
 .winbtns { display: flex; height: 100%; -webkit-app-region: no-drag; app-region: no-drag; }
 .winbtn {
@@ -58,6 +80,11 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+/* Short screens: the controls outrank waveform height, so the deck takes a
+   bigger share and the loudness target stays on screen. */
+@media (max-height: 760px) {
+  .workspace { grid-template-rows: auto minmax(130px, 25fr) minmax(280px, 47fr); }
 }
 
 /* status bar */
@@ -127,11 +154,13 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  min-width: 232px;
+  min-width: 196px;
 }
 .timecode .total { color: var(--text-spec); font-size: 14px; }
 
-.trackmeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; justify-content: center; overflow: hidden; }
+/* The track info keeps a real minimum width, so when space runs out the
+   actions wrap to a second line instead of the name clipping to nothing. */
+.trackmeta { flex: 1 1 220px; min-width: 200px; display: flex; flex-direction: column; gap: 2px; justify-content: center; overflow: hidden; }
 .trackmeta .name {
   font-weight: 700;
   font-size: 15px;
@@ -139,22 +168,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Clip instead of colliding with the action buttons when space runs out. */
-.trackmeta .specs { display: flex; gap: var(--space-3); overflow: hidden; }
+/* Specs wrap whole (never mid-word) when the name column is narrow. */
+.trackmeta .specs { display: flex; flex-wrap: wrap; gap: 0 var(--space-3); overflow: hidden; }
 .trackmeta .specs .spec { flex: none; }
 
 .strip-actions .btn-sm { padding: 0 10px; }
 
-/* Actions wrap onto extra lines instead of clipping off-screen. */
+/* Actions wrap onto extra lines instead of clipping off-screen; groups
+   (analyse, listen, files) wrap as units and read apart by spacing. */
 .strip-actions {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-2) var(--space-4);
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
   margin-left: auto;
   min-width: 0;
 }
+.strip-group { display: flex; gap: 6px; align-items: center; }
+.strip-actions .strip-export { padding: 0 14px; }
 
 @media (max-width: 900px) {
   .timecode { min-width: 0; font-size: 17px; }
@@ -162,7 +194,27 @@
 }
 
 /* ── waveform ───────────────────────────────────────────────────────── */
-.wavesection { padding: var(--space-4); min-height: 0; display: flex; }
+.wavesection {
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wavehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 22px;
+  flex: none;
+}
+.wavehead-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wavehead-status.busy { color: var(--text-accent); }
 .waveframe {
   flex: 1;
   position: relative;
@@ -171,36 +223,40 @@
   min-height: 0;
 }
 .waveframe canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.wave-spec-tl { position: absolute; top: 8px; left: 10px; z-index: 2; pointer-events: none; }
-.wave-spec-tr { position: absolute; top: 8px; right: 10px; z-index: 2; pointer-events: none; }
 .wave-controls {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+.wseg {
   display: flex;
   gap: 1px;
-  border: 1px solid var(--graphite-700);
-  background: var(--graphite-700);
+  border: 1px solid var(--border-mid);
+  background: var(--border-mid);
 }
-.wave-controls button {
+.wseg:empty { display: none; }
+.wseg button {
   min-width: 22px;
   height: 20px;
-  padding: 0 5px;
+  padding: 0 6px;
   font-family: var(--font-mono);
   font-size: 10px;
-  background: var(--graphite-900);
-  color: var(--graphite-300);
-  transition: background var(--dur-fast) var(--ease-mech);
+  letter-spacing: 0.04em;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
 }
-.wave-controls button:hover:not(:disabled) { background: var(--graphite-800); color: var(--paper); }
-.wave-controls button:disabled { opacity: 0.4; cursor: default; }
-.wave-controls button.on { background: var(--signal-500); color: #fff; }
+.wseg button:hover:not(:disabled) { background: var(--surface-inset); color: var(--text-body); }
+.wseg button:disabled { opacity: 0.4; cursor: default; }
+.wseg button.on { background: var(--signal-500); color: #fff; }
 
-/* Narrow: drop the informational source line before it collides with the
-   view controls. The same specs live in the track strip and DIAG sheet. */
+/* Narrow: the source line yields to the controls (the same specs live in
+   the track strip and the DIAG sheet). */
 @media (max-width: 860px) {
-  .wave-spec-tl { display: none; }
+  .wavehead-status:not(.busy) { display: none; }
 }
 
 /* ── lower deck ─────────────────────────────────────────────────────── */
@@ -360,6 +416,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Hint captions run tighter than labels so they fit whole in a cell. */
+.knobcell > .spec:not(.klabel) { letter-spacing: 0.05em; }
 
 /* The console's own width (not the window's) decides what to shed:
    first the hint captions (before they truncate), then the row folds. */
@@ -456,6 +514,15 @@
   color: var(--text-spec);
 }
 .seg button.on { background: var(--fill-primary); color: var(--fill-primary-text); }
+/* "Active but closed": a drawer whose settings are in play shows a lamp. */
+.seg button .seglamp {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 5px;
+  vertical-align: 1px;
+  background: var(--signal-500);
+}
 .seg button + button { border-left: 1px solid var(--border-mid); }
 .seg button:disabled { opacity: 0.35; cursor: default; }
 

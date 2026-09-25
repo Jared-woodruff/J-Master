@@ -8,7 +8,6 @@ export function OutputBox() {
   const applyPlatform = useStore((s) => s.applyPlatform);
   const nudgeTarget = useStore((s) => s.nudgeTarget);
   const nudgeCeiling = useStore((s) => s.nudgeCeiling);
-  const openExport = useStore((s) => s.openExport);
   const loaded = useStore((s) => s.loaded);
   const balanceDb = useStore((s) => s.balanceDb);
   const setBalance = useStore((s) => s.setBalance);
@@ -72,9 +71,6 @@ export function OutputBox() {
           AUTO-CENTER
         </button>
       </div>
-      <button className="btn btn-accent btn-lg" disabled={!loaded} onClick={() => openExport(true)}>
-        EXPORT MASTER →
-      </button>
     </div>
   );
 }

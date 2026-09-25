@@ -719,43 +719,56 @@ export function Waveform() {
   const specLine = `SOURCE · ${(source.originalSampleRate / 1000).toFixed(1)} KHZ${
     source.originalBitDepth ? ` · ${source.originalBitDepth} BIT` : ''
   } · ${source.channels === 2 ? 'STEREO' : 'MONO'} · ${source.lufs.toFixed(1)} LUFS IN`;
+  const busyLine = specComputing ? 'ANALYSING SPECTRUM…'
+    : processedView && previewPending ? 'RENDERING MASTER PREVIEW…'
+    : null;
 
+  // The controls live in a header row above the canvas, never on it: over
+  // the canvas they hid the fade-out handle and collided with the labels.
   return (
     <section className="wavesection">
+      <div className="wavehead">
+        <span className={`spec wavehead-status ${busyLine ? 'busy' : ''}`}>{busyLine ?? specLine}</span>
+        <div className="wave-controls" role="toolbar" aria-label="Waveform view">
+          <span className="wseg">
+            <button className={waveView === 'wave' ? 'on' : ''} title="Waveform view"
+              onClick={() => setWaveView('wave')}>WAVE</button>
+            <button className={waveView === 'spec' ? 'on' : ''} title="Spectrogram of the source"
+              onClick={() => setWaveView('spec')}>SPEC</button>
+          </span>
+          <span className="wseg">
+            <button className={gridEnabled && hasTempo ? 'on' : ''} disabled={!hasTempo}
+              title="Bar and beat grid from the detected tempo"
+              onClick={() => setGridEnabled(!gridEnabled)}>GRID</button>
+            <button className={loudnessLane ? 'on' : ''}
+              title="Short-term loudness lane"
+              onClick={() => setLoudnessLane(!loudnessLane)}>LUFS</button>
+          </span>
+          <span className="wseg">
+            <button className={processedView ? 'on' : ''}
+              title="Show the processed master's waveform and loudness (re-renders as you adjust)"
+              onClick={() => setProcessedView(!processedView)}>OUT</button>
+            {processedView && (
+              <button className={outSplit ? 'on' : ''}
+                title="Split compare: source above, master below"
+                onClick={() => setOutSplit(!outSplit)}>SPLIT</button>
+            )}
+          </span>
+          <span className="wseg">
+            <button className={loopOn ? 'on' : ''}
+              title="Loop the section under the playhead · L · or double-click the waveform"
+              onClick={() => toggleLoop()}>LOOP</button>
+          </span>
+          <span className="wseg">
+            <button title="Zoom out · mouse wheel" aria-label="Zoom out" onClick={() => zoomBy(1.6)}>−</button>
+            <button title="Zoom in · mouse wheel" aria-label="Zoom in" onClick={() => zoomBy(1 / 1.6)}>+</button>
+            <button title="Fit the whole track" onClick={() => clampView(0, dur())} disabled={!zoomed}>FIT</button>
+          </span>
+        </div>
+      </div>
       <div className="waveframe frame" ref={wrapRef}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
-        <span className="spec wave-spec-tl" style={zoomed ? { top: OVERVIEW_H + 6 } : undefined}>
-          {specComputing ? 'ANALYSING SPECTRUM…'
-            : processedView && previewPending ? 'RENDERING MASTER PREVIEW…'
-            : specLine}
-        </span>
-        <div className="wave-controls" style={zoomed ? { top: OVERVIEW_H + 4 } : undefined}>
-          <button className={waveView === 'wave' ? 'on' : ''} title="Waveform view"
-            onClick={() => setWaveView('wave')}>WAVE</button>
-          <button className={waveView === 'spec' ? 'on' : ''} title="Spectrogram view (source)"
-            onClick={() => setWaveView('spec')}>SPEC</button>
-          <button className={gridEnabled && hasTempo ? 'on' : ''} disabled={!hasTempo}
-            title="Bar/beat grid from detected tempo"
-            onClick={() => setGridEnabled(!gridEnabled)}>GRID</button>
-          <button className={loudnessLane ? 'on' : ''}
-            title="Short-term loudness lane (source)"
-            onClick={() => setLoudnessLane(!loudnessLane)}>LUFS</button>
-          <button className={processedView ? 'on' : ''}
-            title="Show the processed master's waveform + loudness (recomputes as you adjust)"
-            onClick={() => setProcessedView(!processedView)}>OUT</button>
-          {processedView && (
-            <button className={outSplit ? 'on' : ''}
-              title="Split compare: source above, master below"
-              onClick={() => setOutSplit(!outSplit)}>SPLIT</button>
-          )}
-          <button className={loopOn ? 'on' : ''}
-            title="Loop the section under the playhead (L) · double-click the wave to loop a section"
-            onClick={() => toggleLoop()}>LOOP</button>
-          <button title="Zoom out (wheel)" onClick={() => zoomBy(1.6)}>−</button>
-          <button title="Zoom in (wheel)" onClick={() => zoomBy(1 / 1.6)}>+</button>
-          <button title="Fit whole track" onClick={() => clampView(0, dur())} disabled={!zoomed}>FIT</button>
-        </div>
         <canvas ref={canvasRef} />
         {loading && (
           <div className="wave-loading" role="status">

@@ -37,6 +37,9 @@ export function ConsolePanel() {
   const matchActive = useStore((s) => s.matchEqGains.length > 0);
   const stems = useStore((s) => s.stems);
   const setStem = useStore((s) => s.setStem);
+  const stemsOpen = useStore((s) => s.stemsOpen);
+  const setStemsOpen = useStore((s) => s.setStemsOpen);
+  const stemsActive = stems.bass !== 0 || stems.drums !== 0 || stems.vocal !== 0 || stems.air !== 0;
 
   return (
     <div className="panel panel-console">
@@ -48,9 +51,18 @@ export function ConsolePanel() {
             <button disabled={redoDepth === 0} title="Redo (Ctrl+Y)" onClick={redo}>⟳</button>
           </span>
           <span className="seg" style={{ height: 20 }}>
-            <button className={advEqOpen || advEqActive ? 'on' : ''}
-              title="Advanced 6-band parametric EQ"
-              onClick={() => setAdvEqOpen(!advEqOpen)}>EQ</button>
+            <button className={advEqOpen ? 'on' : ''}
+              title={`Advanced 6-band parametric EQ${advEqActive ? ' · bands active' : ''}`}
+              aria-pressed={advEqOpen}
+              onClick={() => setAdvEqOpen(!advEqOpen)}>
+              EQ{advEqActive && <span className="seglamp" aria-label="active" />}
+            </button>
+            <button className={stemsOpen ? 'on' : ''}
+              title={`Stem lanes: bass / drums / vocal / air trims${stemsActive ? ' · trims active' : ''}`}
+              aria-pressed={stemsOpen}
+              onClick={() => setStemsOpen(!stemsOpen)}>
+              STEMS{stemsActive && <span className="seglamp" aria-label="active" />}
+            </button>
           </span>
           {matchActive && <span className="spec" style={{ color: 'var(--text-accent)' }}>MATCHED</span>}
           <span className="seg" style={{ height: 20 }}>
@@ -112,7 +124,7 @@ export function ConsolePanel() {
           </div>
         </div>
 
-        <div className="stemrow">
+        {stemsOpen && <div className="stemrow">
           <span className="spec stemlabel">STEM<br />LANES</span>
           {(['bass', 'drums', 'vocal', 'air'] as const).map((lane) => (
             <div className="knobcell" key={lane}>
@@ -126,7 +138,7 @@ export function ConsolePanel() {
             COMPONENT TRIMS ±3 DB · BASS &lt;120 HZ · DRUMS = TRANSIENTS ·
             VOCAL = CENTRE 250–3.5K · AIR &gt;8 KHZ
           </span>
-        </div>
+        </div>}
 
         {advEqOpen && <AdvEqDrawer />}
 

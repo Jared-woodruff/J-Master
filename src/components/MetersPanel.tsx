@@ -194,12 +194,11 @@ function Spectrum() {
       ctx.fillStyle = colWell;
       ctx.fillRect(0, 0, w, h);
 
-      // octave gridlines: 100 Hz, 1 kHz, 10 kHz
+      // decade gridlines: 100 Hz, 1 kHz, 10 kHz (labels paint last, on top)
+      const decades: [number, string][] = [[100, '100'], [1000, '1K'], [10000, '10K']];
+      const decadeX = (f: number) => (Math.log10(f / 20) / Math.log10(20000 / 20)) * w;
       ctx.fillStyle = colHair;
-      for (const f of [100, 1000, 10000]) {
-        const x = (Math.log10(f / 20) / Math.log10(20000 / 20)) * w;
-        ctx.fillRect(x, 0, 1, h);
-      }
+      for (const [f] of decades) ctx.fillRect(decadeX(f), 0, 1, h);
 
       const barW = w / BANDS;
       if (data.length > 0) {
@@ -228,6 +227,20 @@ function Spectrum() {
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
+      }
+
+      // Frequency labels on a well-coloured chip so bars never swallow them.
+      ctx.font = `8px 'IBM Plex Mono', monospace`;
+      ctx.textBaseline = 'top';
+      for (const [f, label] of decades) {
+        const x = decadeX(f) + 3;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = colWell;
+        ctx.globalAlpha = 0.75;
+        ctx.fillRect(x - 1, 2, tw + 2, 10);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = pal.spec;
+        ctx.fillText(label, x, 3);
       }
     };
     raf = requestAnimationFrame(draw);

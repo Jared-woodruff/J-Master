@@ -23,6 +23,18 @@
   drop over the diagnosis sheet simply loads.
 - Loading shows the file name and phase instead of freezing, and a file
   that can't be decoded leaves the current track untouched.
+- **Layout pass, measured at five window sizes.** EXPORT is a permanent
+  button in the track strip (it sat below the fold at 1440×920 and
+  smaller). OPEN / SAVE / BATCH moved to the title bar, so the strip fits
+  on one line down to 1280 px, and short screens give the console more
+  height so the loudness target stays in view at 1280×680.
+- The waveform's view controls moved to a header row above the canvas.
+  They no longer cover the fade-out handle (it can be dragged again at
+  any zoom), and section labels no longer print through the source line.
+- STEM LANES became a drawer beside EQ, and both show a lamp when their
+  settings are active. Track specs wrap instead of clipping mid-word,
+  knob captions fit whole, the spectrum has frequency labels, and toasts
+  cap at three.
 
 ## 2.4.0
 - Long track names, artists, and genres can no longer overflow any

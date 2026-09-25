@@ -1,5 +1,4 @@
 import { useStore } from '../state/store';
-import { pickAndLoadFile } from '../lib/filepick';
 
 function fmtTime(sec: number, ms = true): string {
   const m = Math.floor(sec / 60);
@@ -25,7 +24,9 @@ export function TrackStrip() {
   const seekSec = useStore((s) => s.seekSec);
   const setBypass = useStore((s) => s.setBypass);
   const setLimiterDelta = useStore((s) => s.setLimiterDelta);
-  const openBatch = useStore((s) => s.openBatch);
+  const openExport = useStore((s) => s.openExport);
+  const masterItBusy = useStore((s) => s.masterItBusy);
+  const matchActive = useStore((s) => s.matchEqGains.length > 0);
 
   if (!source) return null;
 
@@ -60,68 +61,66 @@ export function TrackStrip() {
       </div>
 
       <div className="strip-actions">
-        <button
-          className="btn btn-sm btn-accent"
-          disabled={useStore((s) => s.masterItBusy)}
-          onClick={() => void useStore.getState().masterIt()}
-          title="Auto-master: analysis picks a preset, applies fixes, shows its reasoning"
-        >
-          AUTO →
-        </button>
-        <button
-          className={`btn btn-sm btn-toggle ${useStore((s) => s.matchEqGains.length > 0) ? 'on' : ''}`}
-          onClick={() => useStore.getState().openMatch(true)}
-          title="Match this master to a reference track"
-        >
-          MATCH
-        </button>
-        <button
-          className={`btn btn-sm btn-toggle ${bypass ? 'on' : ''}`}
-          onClick={() => setBypass(!bypass)}
-          title="Loudness-matched reference (hear the untouched source) · key R"
-        >
-          <span className={`lamp ${bypass ? 'signal' : ''}`} />
-          REF
-        </button>
-        <button
-          className={`btn btn-sm btn-toggle ${limiterDelta ? 'on' : ''}`}
-          onClick={() => setLimiterDelta(!limiterDelta)}
-          title="Hear only what the limiter is removing (never exported)"
-          disabled={bypass}
-        >
-          <span className={`lamp ${limiterDelta ? 'warn' : ''}`} />
-          LIM Δ
-        </button>
-        <button
-          className={`btn btn-sm btn-toggle ${metronome ? 'on' : ''}`}
-          onClick={() => setMetronome(!metronome)}
-          title={tempo ? `Metronome click at ${tempo.bpm.toFixed(1)} BPM (never exported)` : 'Metronome (waiting for tempo detection)'}
-          disabled={!tempo}
-        >
-          <span className={`lamp ${metronome ? 'signal' : ''}`} />
-          CLICK
-        </button>
-        <button
-          className="btn btn-sm btn-toggle"
-          onClick={() => openDiag(true)}
-          title="Source check sheet: bass placement, width stability, balance, HF texture"
-        >
-          <span className={`lamp ${diagIssueCount > 0 ? 'warn' : 'run'}`} />
-          DIAG
-        </button>
-        <button
-          className="btn btn-sm btn-secondary"
-          onClick={() => void useStore.getState().saveProject()}
-          title="Save project — console, slots, metadata, batch queue (Ctrl+S)"
-        >
-          SAVE
-        </button>
-        <button className="btn btn-sm btn-secondary" onClick={() => void pickAndLoadFile()}
-          title="Load audio or a .jmaster project (Ctrl+O)">
-          LOAD
-        </button>
-        <button className="btn btn-sm btn-secondary" onClick={() => openBatch(true)} title="Master a whole album with these settings">
-          BATCH
+        {/* Analyse and shape */}
+        <div className="strip-group">
+          <button
+            className="btn btn-sm btn-toggle"
+            onClick={() => openDiag(true)}
+            title={diagIssueCount > 0
+              ? `Source check sheet · ${diagIssueCount} issue${diagIssueCount > 1 ? 's' : ''} found`
+              : 'Source check sheet · all clear'}
+          >
+            <span className={`lamp ${diagIssueCount > 0 ? 'warn' : 'run'}`} />
+            DIAG
+          </button>
+          <button
+            className="btn btn-sm btn-secondary"
+            disabled={masterItBusy}
+            onClick={() => void useStore.getState().masterIt()}
+            title="Auto-master: analysis picks a preset, applies fixes, and shows its reasoning"
+          >
+            {masterItBusy ? 'THINKING…' : 'AUTO →'}
+          </button>
+          <button
+            className={`btn btn-sm btn-toggle ${matchActive ? 'on' : ''}`}
+            onClick={() => useStore.getState().openMatch(true)}
+            title="Match this master to a reference track you trust"
+          >
+            MATCH
+          </button>
+        </div>
+        {/* Listen */}
+        <div className="strip-group">
+          <button
+            className={`btn btn-sm btn-toggle ${bypass ? 'on' : ''}`}
+            onClick={() => setBypass(!bypass)}
+            title="Hear the untouched source, loudness-matched · R · hold R for a momentary compare"
+          >
+            <span className={`lamp ${bypass ? 'signal' : ''}`} />
+            REF
+          </button>
+          <button
+            className={`btn btn-sm btn-toggle ${limiterDelta ? 'on' : ''}`}
+            onClick={() => setLimiterDelta(!limiterDelta)}
+            title="Hear only what the limiter is removing · never exported"
+            disabled={bypass}
+          >
+            <span className={`lamp ${limiterDelta ? 'warn' : ''}`} />
+            LIM Δ
+          </button>
+          <button
+            className={`btn btn-sm btn-toggle ${metronome ? 'on' : ''}`}
+            onClick={() => setMetronome(!metronome)}
+            title={tempo ? `Metronome click at ${tempo.bpm.toFixed(1)} BPM · never exported` : 'Metronome · waiting for tempo detection'}
+            disabled={!tempo}
+          >
+            <span className={`lamp ${metronome ? 'signal' : ''}`} />
+            CLICK
+          </button>
+        </div>
+        <button className="btn btn-sm btn-accent strip-export" onClick={() => openExport(true)}
+          title="Render and save the master · E">
+          EXPORT →
         </button>
       </div>
     </div>

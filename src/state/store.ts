@@ -338,6 +338,7 @@ interface JMasterState {
   advEq: AdvEqBand[];
   stems: { bass: number; drums: number; vocal: number; air: number };
   advEqOpen: boolean;
+  stemsOpen: boolean;
   matchOpen: boolean;
   matchRef: {
     name: string; lufs: number; sideRatioDb: number;
@@ -434,6 +435,7 @@ interface JMasterState {
   applyMatch(): void;
   clearMatch(): void;
   setAdvEqOpen(open: boolean): void;
+  setStemsOpen(open: boolean): void;
   setAdvBand(index: number, patch: Partial<AdvEqBand>): void;
   resetAdvEq(): void;
   setStem(lane: 'bass' | 'drums' | 'vocal' | 'air', db: number): void;
@@ -687,6 +689,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     advEq: defaultAdvEq(),
     stems: { bass: 0, drums: 0, vocal: 0, air: 0 },
     advEqOpen: false,
+    stemsOpen: false,
     matchOpen: false,
     matchRef: null,
     matchLoading: false,
@@ -923,6 +926,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     setAdvEqOpen(open) {
       set({ advEqOpen: open });
+    },
+
+    setStemsOpen(open) {
+      set({ stemsOpen: open });
     },
 
     setAdvBand(index, patch) {
