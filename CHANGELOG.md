@@ -31,6 +31,13 @@
 - The waveform's view controls moved to a header row above the canvas.
   They no longer cover the fade-out handle (it can be dragged again at
   any zoom), and section labels no longer print through the source line.
+- **Your own presets.** + SAVE in the preset rack stores the console
+  (macros, target, ceiling, genre) under your name; your presets list
+  above the genres, persist between sessions, and can be picked per
+  track in BATCH. Saving under an existing name updates it, and deleting
+  takes a second click to confirm.
+- Tweaking a preset no longer makes the rack forget it: the row you
+  started from stays lit, marked MODIFIED, with a REVERT button.
 - **Tooltips in the Jamware style** replace the slow native ones app-wide,
   with keyboard shortcuts shown as key caps. They also appear on keyboard
   focus, and hovering a macro knob now explains what it does.

@@ -1,6 +1,6 @@
 // Batch album processing: queue tracks, apply the current console settings to
 // every one, render sequentially, save into a chosen folder.
-import { useStore, encodeOptionsFrom } from '../state/store';
+import { useStore, encodeOptionsFrom, findPreset, consoleMatchesPreset } from '../state/store';
 import { MetaFields } from './MetaFields';
 import { PRESETS } from '../audio/dsp/params';
 
@@ -10,7 +10,12 @@ export function BatchDialog() {
   const running = useStore((s) => s.batchRunning);
   const dir = useStore((s) => s.batchDir);
   const targetLufs = useStore((s) => s.targetLufs);
-  const presetId = useStore((s) => s.presetId);
+  const userPresets = useStore((s) => s.userPresets);
+  const consoleName = useStore((s) => {
+    const base = findPreset(s, s.presetId ?? s.lastPresetId);
+    if (!base) return 'CUSTOM';
+    return consoleMatchesPreset(s, base) ? base.name : `${base.name} (MODIFIED)`;
+  });
   const openBatch = useStore((s) => s.openBatch);
   const addBatchFiles = useStore((s) => s.addBatchFiles);
   const clearBatch = useStore((s) => s.clearBatch);
@@ -44,7 +49,7 @@ export function BatchDialog() {
         <div>
           <div className="display dtitle">Batch master</div>
           <div className="spec" style={{ marginTop: 4 }}>
-            APPLIES CURRENT CONSOLE · {presetId ? presetId.toUpperCase() : 'CUSTOM'} · {targetLufs.toFixed(1)} LUFS · {fmtLabel}
+            APPLIES CURRENT CONSOLE · {consoleName} · {targetLufs.toFixed(1)} LUFS · {fmtLabel}
           </div>
         </div>
 
@@ -115,13 +120,18 @@ export function BatchDialog() {
                 className="bselect"
                 value={it.presetId ?? ''}
                 disabled={running}
-                title="Sound for this track: current console or a preset"
+                title="Sound for this track: the current console, one of your presets, or a genre"
                 onChange={(e) => useStore.getState().setBatchItemPreset(it.id, e.target.value || null)}
               >
                 <option value="">CONSOLE</option>
-                {PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
+                {userPresets.length > 0 && (
+                  <optgroup label="YOURS">
+                    {userPresets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </optgroup>
+                )}
+                <optgroup label="GENRES">
+                  {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </optgroup>
               </select>
               {it.scanned && it.fixes && it.fixes.length > 0 && it.status === 'pending' && (
                 <button

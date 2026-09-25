@@ -4,6 +4,7 @@ import {
   ChainParams, FadeCurve, MacroValues, MonitorMode, PRESETS, PLATFORMS,
   defaultParams, defaultAdvEq, AdvEqBand, MATCH_EQ_CENTERS,
 } from '../audio/dsp/params';
+import type { GenrePreset } from '../audio/dsp/params';
 import {
   engine, MeterFrame, SourceInfo, ExportStats, ExportProgress,
 } from '../audio/engine';
@@ -78,6 +79,62 @@ export interface DiagIssue {
   action: { type: 'bassMono' } | { type: 'width'; value: number }
         | { type: 'balance' } | { type: 'smooth'; value: number };
   checked: boolean;
+}
+
+/** A console saved by the user, shown in the rack above the genres. */
+export interface UserPreset {
+  id: string;            // 'u-…', never collides with built-in ids
+  name: string;          // uppercase display name
+  macros: MacroValues;
+  targetLufs: number;
+  ceilingDb: number;
+  genre?: string;        // metadata genre at save time, reapplied on use
+  savedAt: string;
+}
+
+const MACRO_LABEL: Record<keyof MacroValues, string> = {
+  tone: 'TONE', shape: 'SHAPE', air: 'AIR', smooth: 'SMOOTH',
+  character: 'CHAR', density: 'DENSITY', impact: 'IMPACT', width: 'WIDTH',
+};
+
+/** The three settings that most distinguish a console, for a spec line. */
+export function summarizeMacros(m: MacroValues): string {
+  const dev = (Object.keys(m) as (keyof MacroValues)[])
+    .map((k) => ({ k, d: k === 'width' ? Math.abs(m.width - 1) : Math.abs(m[k]) }))
+    .filter((x) => x.d >= 0.05)
+    .sort((a, b) => b.d - a.d)
+    .slice(0, 3)
+    .map(({ k }) => k === 'width'
+      ? `WIDTH ${Math.round(m.width * 100)}%`
+      : `${MACRO_LABEL[k]} ${m[k] > 0 && (k === 'tone' || k === 'shape' || k === 'impact') ? '+' : ''}${Math.round(m[k] * 100)}`);
+  return dev.length > 0 ? dev.join(' · ') : 'NEUTRAL';
+}
+
+/** Built-in or user preset by id, in the built-in shape. */
+export function findPreset(
+  s: { userPresets: UserPreset[] },
+  id: string | null | undefined,
+): (GenrePreset & { user?: boolean }) | null {
+  if (!id) return null;
+  const u = s.userPresets.find((p) => p.id === id);
+  if (u) {
+    return {
+      id: u.id, name: u.name, spec: summarizeMacros(u.macros), macros: u.macros,
+      targetLufs: u.targetLufs, ceilingDb: u.ceilingDb, genre: u.genre, user: true,
+    };
+  }
+  return PRESETS.find((p) => p.id === id) ?? null;
+}
+
+/** True when the console still matches the preset exactly. */
+export function consoleMatchesPreset(
+  s: { macros: MacroValues; targetLufs: number; ceilingDb: number },
+  p: { macros: MacroValues; targetLufs: number; ceilingDb: number },
+): boolean {
+  for (const k of Object.keys(p.macros) as (keyof MacroValues)[]) {
+    if (Math.abs(s.macros[k] - p.macros[k]) > 0.005) return false;
+  }
+  return Math.abs(s.targetLufs - p.targetLufs) < 0.05 && Math.abs(s.ceilingDb - p.ceilingDb) < 0.05;
 }
 
 /** What a file drag over the window carries (types only; names arrive on drop). */
@@ -318,6 +375,9 @@ interface JMasterState {
   keysOpen: boolean;
   /** Front-cover art embedded into export tags (session + project file). */
   coverArt: { mime: string; data: Uint8Array; width: number; height: number; name: string } | null;
+  userPresets: UserPreset[];
+  /** The preset the console was last set from, for "modified" + revert. */
+  lastPresetId: string | null;
 
   macros: MacroValues;
   presetId: string | null;
@@ -460,6 +520,11 @@ interface JMasterState {
   /** Downscales to ≤1000 px JPEG and stores it for embedding on export. */
   setCoverFromFile(file: File): Promise<void>;
   clearCover(): void;
+  /** Saves the console as a user preset (same name overwrites). */
+  saveUserPreset(name: string): void;
+  deleteUserPreset(id: string): void;
+  /** Re-applies the preset the console was last set from. */
+  revertPreset(): void;
   setTheme(theme: 'plate' | 'paper'): void;
   setWaveView(view: 'wave' | 'spec'): void;
   openExport(open: boolean): void;
@@ -633,6 +698,7 @@ function applyConsole(snap: ConsoleState, set: (p: Partial<JMasterState>) => voi
     ceilingDb: snap.ceilingDb,
     balanceDb: snap.balanceDb,
     presetId: snap.presetId,
+    ...(snap.presetId ? { lastPresetId: snap.presetId } : {}),
     platformId: snap.platformId,
     bassMono: snap.bassMono,
     fadeInSec: snap.fadeInSec,
@@ -670,6 +736,8 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     recentFiles: [],
     keysOpen: false,
     coverArt: null,
+    userPresets: [],
+    lastPresetId: 'flat',
 
     macros: { tone: 0, shape: 0, air: 0, smooth: 0, character: 0, density: 0, impact: 0, width: 1 },
     presetId: 'flat',
@@ -1072,7 +1140,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           const lufs = item.lufs ?? (await engine.measureLufs(l, r));
 
           let itemParams = params;
-          const override = item.presetId ? PRESETS.find((p) => p.id === item.presetId) : null;
+          const override = findPreset(get(), item.presetId);
           if (override) {
             itemParams = { ...params, ...override.macros, targetLufs: override.targetLufs, ceilingDb: override.ceilingDb };
           }
@@ -1260,19 +1328,63 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     },
 
     applyPreset(id) {
-      const preset = PRESETS.find((p) => p.id === id);
+      const preset = findPreset(get(), id);
       if (!preset) return;
       record(get, 'preset');
+      // Genre tag follows a genre preset (still editable in the export
+      // dialog); a user preset restores the genre it was saved with.
+      const genre = preset.user ? preset.genre : id === 'flat' ? undefined : preset.genre ?? titleCase(preset.name);
       set((s) => ({
         macros: { ...preset.macros },
         targetLufs: preset.targetLufs,
         ceilingDb: preset.ceilingDb,
         presetId: id,
+        lastPresetId: id,
         platformId: null,
-        // Genre tag follows the preset (still editable in the export dialog).
-        meta: id === 'flat' ? s.meta : { ...s.meta, genre: preset.genre ?? titleCase(preset.name) },
+        meta: genre ? { ...s.meta, genre } : s.meta,
       }));
       pushParams(get);
+    },
+
+    saveUserPreset(rawName) {
+      const name = rawName.trim().toUpperCase().slice(0, 28);
+      if (!name) return;
+      const s = get();
+      const existing = s.userPresets.find((p) => p.name === name);
+      const preset: UserPreset = {
+        id: existing?.id ?? `u-${Date.now().toString(36)}`,
+        name,
+        macros: { ...s.macros },
+        targetLufs: s.targetLufs,
+        ceilingDb: s.ceilingDb,
+        genre: s.meta.genre || undefined,
+        savedAt: new Date().toISOString(),
+      };
+      set({
+        userPresets: existing
+          ? s.userPresets.map((p) => (p.id === existing.id ? preset : p))
+          : [preset, ...s.userPresets],
+        presetId: preset.id,
+        lastPresetId: preset.id,
+      });
+      get().pushToast(`${existing ? 'UPDATED' : 'SAVED'} PRESET · ${name}`, 'run');
+    },
+
+    deleteUserPreset(id) {
+      const s = get();
+      const gone = s.userPresets.find((p) => p.id === id);
+      if (!gone) return;
+      set({
+        userPresets: s.userPresets.filter((p) => p.id !== id),
+        presetId: s.presetId === id ? null : s.presetId,
+        lastPresetId: s.lastPresetId === id ? null : s.lastPresetId,
+      });
+      get().pushToast(`DELETED PRESET · ${gone.name}`, 'info');
+    },
+
+    revertPreset() {
+      const id = get().lastPresetId;
+      if (id && findPreset(get(), id)) get().applyPreset(id);
     },
 
     applyPlatform(id) {
@@ -1426,6 +1538,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
               ceilingDb: incoming.ceilingDb,
               balanceDb: incoming.balanceDb,
               presetId: incoming.presetId,
+              ...(incoming.presetId ? { lastPresetId: incoming.presetId } : {}),
               platformId: incoming.platformId,
             }
           : {}),
@@ -1749,7 +1862,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           );
           // Per-track preset override: swap in the preset's macros + targets.
           let itemParams = params;
-          const override = item.presetId ? PRESETS.find((p) => p.id === item.presetId) : null;
+          const override = findPreset(get(), item.presetId);
           if (override) {
             itemParams = {
               ...params,
@@ -1757,7 +1870,8 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
               targetLufs: override.targetLufs,
               ceilingDb: override.ceilingDb,
             };
-            if (override.id !== 'flat') trackTags.genre = override.genre ?? titleCase(override.name);
+            const genre = override.user ? override.genre : override.id === 'flat' ? undefined : override.genre ?? titleCase(override.name);
+            if (genre) trackTags.genre = genre;
           }
           // Per-track diagnosed fixes from the pre-scan.
           if (item.fixesEnabled && item.fixes && item.fixes.length > 0) {
@@ -1840,6 +1954,8 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     loudnessLane: s.loudnessLane,
     outSplit: s.outSplit,
     recentFiles: s.recentFiles,
+    userPresets: s.userPresets,
+    lastPresetId: s.lastPresetId,
     activeSlot: s.activeSlot,
     snapshots: s.snapshots,
     autoFix: s.autoFix,
