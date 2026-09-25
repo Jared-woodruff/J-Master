@@ -16,6 +16,7 @@ import { Toasts } from './components/Toasts';
 import { EmptyState } from './components/EmptyState';
 import { KeysDialog } from './components/KeysDialog';
 import { FileDrop } from './components/FileDrop';
+import { Tooltip } from './components/Tooltip';
 
 export function App() {
   const loaded = useStore((s) => s.loaded);
@@ -133,6 +134,7 @@ export function App() {
       <KeysDialog />
       <FileDrop />
       <Toasts />
+      <Tooltip />
     </div>
   );
 }

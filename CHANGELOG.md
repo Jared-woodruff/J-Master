@@ -31,6 +31,12 @@
 - The waveform's view controls moved to a header row above the canvas.
   They no longer cover the fade-out handle (it can be dragged again at
   any zoom), and section labels no longer print through the source line.
+- **Tooltips in the Jamware style** replace the slow native ones app-wide,
+  with keyboard shortcuts shown as key caps. They also appear on keyboard
+  focus, and hovering a macro knob now explains what it does.
+- Fix: the window's Minimize button held keyboard focus from startup (a
+  stray focus ring, and Enter would minimize). Focus now starts on OPEN
+  FILE.
 - STEM LANES became a drawer beside EQ, and both show a lamp when their
   settings are active. Track specs wrap instead of clipping mid-word,
   knob captions fit whole, the spectrum has frequency labels, and toasts

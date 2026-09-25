@@ -7,6 +7,18 @@ import { FadeCurve } from '../audio/dsp/params';
 const pct = (v: number) => `${Math.round(v * 100)}`;
 const signedPct = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}`;
 
+const HOW = 'drag, wheel or arrows · Shift for fine · double-click resets';
+const HINT = {
+  tone: `Spectral tilt from warm to bright: ±4.5 dB around 700 Hz · ${HOW}`,
+  shape: `Mid contour: scooped (wall of sound) to forward (presence) · ${HOW}`,
+  air: `Sheen: a 13 kHz shelf, up to +6 dB · ${HOW}`,
+  smooth: `Dynamic de-harsh: cuts harsh highs only when they flare up · ${HOW}`,
+  character: `Harmonic drive: 4× oversampled tape and tube colour · ${HOW}`,
+  density: `Glue compression with auto make-up: thickness without pumping · ${HOW}`,
+  impact: `Transient contour: soften to punch, up to ±6 dB on attacks · ${HOW}`,
+  width: `Stereo width with the bass anchored below 140 Hz and the highs opened most · ${HOW}`,
+};
+
 const CURVES: { id: FadeCurve; label: string }[] = [
   { id: 'linear', label: 'LIN' },
   { id: 'smooth', label: 'S' },
@@ -82,42 +94,42 @@ export function ConsolePanel() {
       </div>
       <div className="console-body">
         <div className="knobrow">
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.tone}>
             <Knob label="Tone" value={macros.tone} min={-1} max={1} defaultValue={0} bipolarFrom={0}
               entryScale={100} format={signedPct} onChange={(v) => setMacro('tone', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>WARM ◂ ▸ BRIGHT</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.shape}>
             <Knob label="Shape" value={macros.shape} min={-1} max={1} defaultValue={0} bipolarFrom={0}
               entryScale={100} format={signedPct} onChange={(v) => setMacro('shape', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>SCOOP ◂ ▸ FORWARD</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.air}>
             <Knob label="Air" value={macros.air} min={0} max={1} defaultValue={0}
               entryScale={100} format={pct} onChange={(v) => setMacro('air', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>13 KHZ SHELF</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.smooth}>
             <Knob label="Smooth" value={macros.smooth} min={0} max={1} defaultValue={0}
               entryScale={100} format={pct} onChange={(v) => setMacro('smooth', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>DE-HARSH HF</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.character}>
             <Knob label="Character" value={macros.character} min={0} max={1} defaultValue={0}
               entryScale={100} format={pct} onChange={(v) => setMacro('character', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>HARMONIC DRIVE</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.density}>
             <Knob label="Density" value={macros.density} min={0} max={1} defaultValue={0}
               entryScale={100} format={pct} onChange={(v) => setMacro('density', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>GLUE COMP</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.impact}>
             <Knob label="Impact" value={macros.impact} min={-1} max={1} defaultValue={0} bipolarFrom={0}
               entryScale={100} format={signedPct} onChange={(v) => setMacro('impact', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>SOFT ◂ ▸ PUNCH</span>
           </div>
-          <div className="knobcell">
+          <div className="knobcell" title={HINT.width}>
             <Knob label="Width" value={macros.width} min={0} max={2} defaultValue={1} bipolarFrom={1}
               entryScale={100} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setMacro('width', v)} />
             <span className="spec" style={{ fontSize: 8.5 }}>TILTED · BASS SAFE</span>

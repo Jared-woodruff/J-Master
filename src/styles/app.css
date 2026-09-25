@@ -806,6 +806,47 @@
 .cover-info .line1 { font-family: var(--font-mono); font-size: 12px; color: var(--text-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .cover-info .line2 { font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
+/* tooltip: a graphite spec plate in both themes */
+.tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 95;
+  max-width: 300px;
+  padding: 7px 10px;
+  background: var(--graphite-950);
+  color: var(--paper);
+  border: 1px solid var(--graphite-700);
+  box-shadow: var(--shadow-overlay);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  animation: fade-in 90ms var(--ease-mech);
+}
+.tip .tipmain { display: block; }
+.tip .tipmeta {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--graphite-400);
+}
+.tip .tipsep { color: var(--graphite-600); }
+.tip kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--graphite-600);
+  border-bottom-width: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--paper);
+}
+
 /* toasts */
 .toasts { position: fixed; left: var(--space-4); bottom: 34px; display: flex; flex-direction: column; gap: var(--space-2); z-index: 60; max-width: calc(100vw - 2 * var(--space-4)); }
 .toast {
