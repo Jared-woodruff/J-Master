@@ -26,6 +26,7 @@ export function BatchDialog() {
   const setExportMp3Kbps = useStore((s) => s.setExportMp3Kbps);
   const setExportOpusKbps = useStore((s) => s.setExportOpusKbps);
   const toggleItemFixes = useStore((s) => s.toggleItemFixes);
+  const dragging = useStore((s) => s.fileDrag !== null && s.fileDrag.images < s.fileDrag.count) && !running;
 
   if (!open) return null;
 
@@ -36,18 +37,7 @@ export function BatchDialog() {
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget && !running) openBatch(false); }}>
-      <div
-        className="dialog frame"
-        role="dialog"
-        aria-label="Batch master"
-        style={{ width: 620 }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          const files = Array.from(e.dataTransfer.files ?? []);
-          if (files.length) useStore.getState().addBatchDroppedFiles(files);
-        }}
-      >
+      <div className="dialog frame" role="dialog" aria-label="Batch master" style={{ width: 620 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
@@ -100,10 +90,10 @@ export function BatchDialog() {
           </div>
         )}
 
-        <div className="batchlist">
-          {items.length === 0 && (
-            <div className="spec" style={{ padding: 'var(--space-4)', textAlign: 'center' }}>
-              DROP TRACKS HERE OR ADD TRACKS · WHOLE ALBUMS WELCOME
+        <div className={`batchlist ${dragging ? 'dragover' : ''}`}>
+          {(items.length === 0 || dragging) && (
+            <div className="spec" style={{ padding: 'var(--space-4)', textAlign: 'center', color: dragging ? 'var(--text-accent)' : undefined }}>
+              {dragging ? 'DROP TO QUEUE · AUDIO FILES ONLY' : 'DROP TRACKS ANYWHERE ON THIS DIALOG · OR ADD TRACKS'}
             </div>
           )}
           {items.map((it, idx) => (

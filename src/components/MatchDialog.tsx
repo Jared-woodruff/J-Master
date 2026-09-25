@@ -15,6 +15,7 @@ export function MatchDialog() {
   const loadReference = useStore((s) => s.loadReference);
   const applyMatch = useStore((s) => s.applyMatch);
   const clearMatch = useStore((s) => s.clearMatch);
+  const dragging = useStore((s) => s.fileDrag !== null && s.fileDrag.images < s.fileDrag.count) && !loading;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Correction-curve plot.
@@ -70,9 +71,13 @@ export function MatchDialog() {
           </div>
         </div>
 
-        {!matchRef && (
+        {dragging ? (
+          <div className="dropband">
+            <span className="spec" style={{ color: 'var(--text-accent)' }}>DROP TO USE AS THE REFERENCE</span>
+          </div>
+        ) : !matchRef && (
           <div className="spec" style={{ padding: '8px 0', whiteSpace: 'normal' }}>
-            LOAD A REFERENCE TRACK. ITS TONAL BALANCE, LOUDNESS AND WIDTH ARE
+            LOAD OR DROP A REFERENCE TRACK. ITS TONAL BALANCE, LOUDNESS AND WIDTH ARE
             MEASURED AGAINST {source.name.toUpperCase()}.
           </div>
         )}

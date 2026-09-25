@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+- **Fix: dropping a track onto the open screen made the UI flash until
+  restart.** One drop was handled twice, loading the track in parallel and
+  creating two audio engines whose meter frames fought over the playhead
+  (it jumped between two positions about 90 times a second and play/pause
+  flickered). Drops now have a single owner, the audio engine can only be
+  created once, and loads run strictly in order with the most recent
+  request winning.
+- Fix: dropped tracks remember where they live again (Electron removed
+  `File.path`), so they reach Recent Files and saved projects find their
+  audio.
+- Fix: loading a track while the previous one was still being analysed
+  could hand it the previous track's tempo, grid, sections, or
+  spectrogram.
+- Fix: changing tracks in SPEC view left the spectrogram blank until the
+  view was toggled.
+- **Drop anywhere:** the loaded console shows a drop veil that says what
+  will happen. Several tracks at once queue in BATCH (the first opens in
+  the console if it's empty), a track dropped on MATCH becomes the
+  reference, an image dropped on EXPORT or BATCH becomes the cover, and a
+  drop over the diagnosis sheet simply loads.
+- Loading shows the file name and phase instead of freezing, and a file
+  that can't be decoded leaves the current track untouched.
+
 ## 2.4.0
 - Long track names, artists, and genres can no longer overflow any
   surface: the diagnosis and match dialogs clip or wrap their name

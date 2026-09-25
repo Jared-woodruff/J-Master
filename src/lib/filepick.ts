@@ -1,6 +1,7 @@
 // File opening that works in both worlds: native dialog under Electron,
 // <input type=file> in the browser preview.
 import { useStore } from '../state/store';
+import { filePathOf } from './filepath';
 
 export async function pickAndLoadFile(): Promise<void> {
   const bridge = (window as any).jmaster;
@@ -21,9 +22,8 @@ export async function pickAndLoadFile(): Promise<void> {
   input.click();
 }
 
-export async function loadDroppedFile(file: File): Promise<void> {
-  const data = await file.arrayBuffer();
-  // Electron exposes the filesystem path on dropped File objects.
-  const path = (file as any).path ?? null;
-  await useStore.getState().loadFile(data, file.name, path);
+export function loadDroppedFile(file: File): Promise<void> {
+  // The read is handed over unresolved so the store claims its place in
+  // line at drop time.
+  return useStore.getState().loadFile(file.arrayBuffer(), file.name, filePathOf(file));
 }

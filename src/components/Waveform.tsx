@@ -62,6 +62,8 @@ export function Waveform() {
   const hoverX = useRef<number | null>(null);
   const view = useRef({ start: 0, end: 1 });
   const specCanvas = useRef<HTMLCanvasElement | null>(null);
+  const specFor = useRef<unknown>(null);
+  const specReq = useRef(0);
   const [zoomed, setZoomed] = useState(false);
   const [specComputing, setSpecComputing] = useState(false);
   const source = useStore((s) => s.source);
@@ -79,20 +81,28 @@ export function Waveform() {
   const loopOn = useStore((s) => s.loopStartSec !== null);
   const toggleLoop = useStore((s) => s.toggleLoop);
   const previewPending = useStore((s) => s.previewPending);
+  const loading = useStore((s) => s.loading);
+  const loadingName = useStore((s) => s.loadingName);
+  const loadPhase = useStore((s) => s.loadPhase);
 
-  // Compute the spectrogram lazily the first time SPEC is selected.
+  // Compute the spectrogram lazily the first time SPEC is selected for a
+  // track. The cached image remembers which source it belongs to, so a new
+  // track in SPEC view recomputes instead of showing nothing.
   useEffect(() => {
-    if (waveView !== 'spec' || !source) return;
-    if (specCanvas.current) return;
+    if (specFor.current !== source) {
+      specCanvas.current = null;
+      specFor.current = source;
+    }
+    if (waveView !== 'spec' || !source || specCanvas.current) return;
+    const req = ++specReq.current;
+    const forSource = source;
     setSpecComputing(true);
     void engine.requestSpectrogram().then((sg) => {
-      if (sg) specCanvas.current = buildSpecCanvas(sg);
+      if (req !== specReq.current) return;
+      if (sg && specFor.current === forSource) specCanvas.current = buildSpecCanvas(sg);
       setSpecComputing(false);
     });
   }, [waveView, source]);
-
-  // New track invalidates the cached image.
-  useEffect(() => { specCanvas.current = null; }, [source]);
 
   // Reset the view whenever a new track lands.
   useEffect(() => {
@@ -747,6 +757,16 @@ export function Waveform() {
           <button title="Fit whole track" onClick={() => clampView(0, dur())} disabled={!zoomed}>FIT</button>
         </div>
         <canvas ref={canvasRef} />
+        {loading && (
+          <div className="wave-loading" role="status">
+            <span className="spec" title={loadingName ?? undefined}
+              style={{ maxWidth: '80%', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-body)' }}>
+              LOADING {(loadingName ?? '').toUpperCase()}
+            </span>
+            <div className="loadbar"><span /></div>
+            <span className="spec" style={{ color: 'var(--text-accent)' }}>{loadPhase ?? ''}</span>
+          </div>
+        )}
       </div>
     </section>
   );

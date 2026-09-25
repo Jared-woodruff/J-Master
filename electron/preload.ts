@@ -1,6 +1,11 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('jmaster', {
+  // Electron 32+ removed File.path; dropped files resolve their disk path
+  // here instead ('' for files not backed by disk).
+  pathForFile: (file: File): string => {
+    try { return webUtils.getPathForFile(file); } catch { return ''; }
+  },
   openFile: (): Promise<{ name: string; path: string; data: ArrayBuffer } | null> =>
     ipcRenderer.invoke('jmaster:openFile'),
   saveProjectFile: (defaultName: string, json: string): Promise<string | null> =>

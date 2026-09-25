@@ -8,6 +8,7 @@ import {
   engine, MeterFrame, SourceInfo, ExportStats, ExportProgress,
 } from '../audio/engine';
 import type { EncodeOptions, ExportFormat, TrackTags } from '../audio/encode';
+import { filePathOf } from '../lib/filepath';
 
 export interface Toast {
   id: number;
@@ -77,6 +78,12 @@ export interface DiagIssue {
   action: { type: 'bassMono' } | { type: 'width'; value: number }
         | { type: 'balance' } | { type: 'smooth'; value: number };
   checked: boolean;
+}
+
+/** What a file drag over the window carries (types only; names arrive on drop). */
+export interface FileDragInfo {
+  count: number;
+  images: number;
 }
 
 export interface DiagCheck {
@@ -292,10 +299,13 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 let suppressDiagOnce = false;
+let loadToken = 0;
 
 interface JMasterState {
   loaded: boolean;
   loading: boolean;
+  /** File name of the load in flight (drives the loading veil). */
+  loadingName: string | null;
   loadError: string | null;
   source: SourceInfo | null;
   /** Filesystem path of the loaded audio (Electron), for project files. */
@@ -386,7 +396,8 @@ interface JMasterState {
   albumAssembling: { phase: string; pct: number } | null;
   albumResult: { imagePath: string; cuePath: string; totalMin: number } | null;
 
-  loadFile(data: ArrayBuffer, name: string, path?: string | null): Promise<void>;
+  /** Accepts a pending read so load order follows request order. */
+  loadFile(data: ArrayBuffer | Promise<ArrayBuffer>, name: string, path?: string | null): Promise<void>;
   setMacro(key: keyof MacroValues, value: number): void;
   applyPreset(id: string): void;
   applyPlatform(id: string): void;
@@ -413,7 +424,13 @@ interface JMasterState {
   redo(): void;
   saveProject(): Promise<void>;
   openMatch(open: boolean): void;
-  loadReference(): Promise<void>;
+  /** Analyzes a reference track: the dropped file, or one picked now. */
+  loadReference(dropped?: File): Promise<void>;
+  /** A file drag hovering the window (null when none). */
+  fileDrag: FileDragInfo | null;
+  setFileDrag(info: FileDragInfo | null): void;
+  /** Phase of the load in flight, for the loading veil. */
+  loadPhase: string | null;
   applyMatch(): void;
   clearMatch(): void;
   setAdvEqOpen(open: boolean): void;
@@ -640,6 +657,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
   return {
     loaded: false,
     loading: false,
+    loadingName: null,
+    loadPhase: null,
+    fileDrag: null,
     loadError: null,
     source: null,
     trackPath: null,
@@ -728,15 +748,41 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     async loadFile(data, name, path = null) {
       // Project files route through the project loader.
       if (name.toLowerCase().endsWith('.jmaster')) {
-        await openProject(new TextDecoder().decode(data), set, get);
+        let text: string;
+        try {
+          text = new TextDecoder().decode(await data);
+        } catch {
+          if (path) get().pruneRecentFile(path);
+          get().pushToast(`NOT FOUND · ${name.toUpperCase()}`, 'fault');
+          return;
+        }
+        await openProject(text, set, get);
         return;
       }
-      set({ loading: true, loadError: null });
+      // Latest REQUEST wins, so the token is taken now, before the bytes
+      // arrive: a big file dropped first must not overtake a small file
+      // dropped after it just because it took longer to read.
+      const token = ++loadToken;
+      set({ loading: true, loadError: null, loadingName: name, loadPhase: 'READING' });
+      let bytes: ArrayBuffer;
       try {
-        const source = await engine.loadFile(data, name);
+        bytes = await data;
+      } catch {
+        if (token !== loadToken) return;
+        set({ loading: false, loadingName: null, loadPhase: null });
+        if (path) get().pruneRecentFile(path);
+        get().pushToast(`NOT FOUND · ${name.toUpperCase()}`, 'fault');
+        return;
+      }
+      if (token !== loadToken) return;
+      try {
+        const source = await engine.loadFile(bytes, name, (phase) => {
+          if (token === loadToken) set({ loadPhase: phase });
+        });
+        if (token !== loadToken || !source) return;
         const { issues, checks } = deriveDiagnosis(source.diagnostics, source.balanceOffsetDb);
         set({
-          loaded: true, loading: false, source, trackPath: path,
+          loaded: true, loading: false, loadingName: null, loadPhase: null, source, trackPath: path,
           playing: false, playheadSec: 0,
           loopStartSec: null, loopEndSec: null, monitor: 'stereo',
           tempo: null, balanceDb: 0, bassMono: false, metronome: false,
@@ -761,12 +807,14 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         }
         // Tempo detection runs in the background; the grid appears when ready.
         void engine.requestTempo().then((t) => {
+          if (get().source !== source) return;
           set({ tempo: t });
           pushParams(get);
         });
       } catch (err) {
-        set({ loading: false, loadError: String(err) });
-        get().pushToast('DECODE FAILED. UNSUPPORTED FILE.', 'fault');
+        if (token !== loadToken) return;
+        set({ loading: false, loadingName: null, loadPhase: null, loadError: String(err) });
+        get().pushToast(`CAN'T READ ${name.toUpperCase()} · UNSUPPORTED OR DAMAGED FILE`, 'fault');
       }
     },
 
@@ -780,14 +828,18 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       set({ matchOpen: open });
     },
 
-    async loadReference() {
+    async loadReference(dropped) {
       const s = get();
       if (!s.loaded || s.matchLoading) return;
-      // Pick the reference file (native dialog or browser input).
+      // A dropped reference skips the picker; otherwise pick one (native
+      // dialog or browser input).
       const bridge = (window as any).jmaster;
       let bytes: ArrayBuffer | null = null;
       let name = '';
-      if (bridge?.openFile) {
+      if (dropped) {
+        bytes = await dropped.arrayBuffer();
+        name = dropped.name;
+      } else if (bridge?.openFile) {
         const res = await bridge.openFile();
         if (!res || res.name.toLowerCase().endsWith('.jmaster')) return;
         bytes = res.data;
@@ -1375,7 +1427,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     },
 
     togglePlay() {
-      if (!get().loaded) return;
+      if (!get().loaded || get().loading) return;
       if (get().playing) {
         engine.pause();
         set({ playing: false });
@@ -1426,6 +1478,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     openKeys(open) {
       set({ keysOpen: open });
+    },
+
+    setFileDrag(info) {
+      const cur = get().fileDrag;
+      if (cur === info) return;
+      if (cur && info && cur.count === info.count && cur.images === info.images) return;
+      set({ fileDrag: info });
     },
 
     async setCoverFromFile(file) {
@@ -1592,7 +1651,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     addBatchDroppedFiles(files) {
       const items: BatchItem[] = files.map((f) => {
         const id = batchSeq++;
-        batchSources.set(id, { file: f, path: (f as any).path ?? undefined });
+        batchSources.set(id, { file: f, path: filePathOf(f) ?? undefined });
         return { id, name: f.name, status: 'pending' as BatchStatus, pct: 0, phase: '' };
       });
       set((s) => ({ batchItems: [...s.batchItems, ...items] }));

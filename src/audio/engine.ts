@@ -115,7 +115,14 @@ export class AudioEngine {
   private srcL: Float32Array | null = null;
   private srcR: Float32Array | null = null;
   private meterListeners = new Set<MeterListener>();
-  private analyzeResolve: ((v: any) => void) | null = null;
+  // The analysis worker answers strictly in request order, so each reply
+  // resolves the oldest waiter of its type (a single slot let a second
+  // request steal the first one's reply).
+  private analyzeWaiters: ((v: any) => void)[] = [];
+  private tempoWaiters: ((v: any) => void)[] = [];
+  private spectrogramWaiters: ((v: any) => void)[] = [];
+  /** Bumps whenever the loaded source changes; stale results are dropped. */
+  private gen = 0;
   private renderHandlers: {
     onProgress: (p: ExportProgress) => void;
     onDone: (result: RenderResult) => void;
@@ -136,12 +143,11 @@ export class AudioEngine {
   spectrumPreData: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   /** Lazily computed source spectrogram (log-frequency, dB-mapped bytes). */
   spectrogram: { cols: number; bands: number; data: Uint8Array } | null = null;
-  private spectrogramResolve: ((v: any) => void) | null = null;
   private spectrogramPending: Promise<any> | null = null;
 
   /** Detected tempo grid + sections for the loaded track. */
   tempo: TempoInfo | null = null;
-  private tempoResolve: ((v: any) => void) | null = null;
+  private tempoPending: Promise<TempoInfo | null> | null = null;
 
   /** Short-term loudness lane of the source (one point per stepSec). */
   loudnessLane: { stepSec: number; values: Float32Array } | null = null;
@@ -151,8 +157,23 @@ export class AudioEngine {
     return () => this.meterListeners.delete(fn);
   }
 
-  private async ensureContext(): Promise<AudioContext> {
-    if (this.ctx) return this.ctx;
+  // One context for the life of the app. Callers that race here (a drop
+  // firing two loads, a batch scan during the first load) must share the
+  // same in-flight creation: two contexts mean two worklets posting meter
+  // frames into the same listeners, and the UI flickers between them.
+  private ctxPromise: Promise<AudioContext> | null = null;
+
+  private ensureContext(): Promise<AudioContext> {
+    if (!this.ctxPromise) {
+      this.ctxPromise = this.createContext().catch((err) => {
+        this.ctxPromise = null;
+        throw err;
+      });
+    }
+    return this.ctxPromise;
+  }
+
+  private async createContext(): Promise<AudioContext> {
     const ctx = new AudioContext({ sampleRate: TARGET_RATE, latencyHint: 'interactive' });
     await ctx.audioWorklet.addModule('./audio/jmaster-processor.js');
     const node = new AudioWorkletNode(ctx, 'jmaster-processor', {
@@ -198,9 +219,8 @@ export class AudioEngine {
     this.worker = new Worker('./audio/jmaster-render-worker.js');
     this.worker.onmessage = (e) => {
       const d = e.data;
-      if (d.type === 'analyzed' && this.analyzeResolve) {
-        this.analyzeResolve(d);
-        this.analyzeResolve = null;
+      if (d.type === 'analyzed') {
+        this.analyzeWaiters.shift()?.(d);
       } else if (d.type === 'progress' && this.renderHandlers) {
         this.renderHandlers.onProgress({ phase: d.phase, pct: d.pct });
       } else if (d.type === 'done' && this.renderHandlers) {
@@ -216,38 +236,50 @@ export class AudioEngine {
           this.chainDeltaDb = Math.max(-8, Math.min(8, d.chainDeltaDb));
           if (this.lastParams) this.pushParams(this.lastParams);
         }
-      } else if (d.type === 'spectrogram' && this.spectrogramResolve) {
-        this.spectrogram = { cols: d.cols, bands: d.bands, data: new Uint8Array(d.data) };
-        this.spectrogramResolve(this.spectrogram);
-        this.spectrogramResolve = null;
-        this.spectrogramPending = null;
-      } else if (d.type === 'tempo' && this.tempoResolve) {
-        this.tempo = d.bpm > 0
-          ? {
-              bpm: d.bpm,
-              firstBeatSec: d.firstBeatSec,
-              firstBarSec: d.firstBarSec ?? d.firstBeatSec,
-              confidence: d.confidence,
-              sections: d.sections ?? [],
-            }
-          : null;
-        this.tempoResolve(this.tempo);
-        this.tempoResolve = null;
+      } else if (d.type === 'spectrogram') {
+        this.spectrogramWaiters.shift()?.(d);
+      } else if (d.type === 'tempo') {
+        this.tempoWaiters.shift()?.(d);
       }
     };
     return this.worker;
   }
 
+  // Loads run strictly one at a time (they share the worklet, the analysis
+  // resolver and every cache below). A load still queued when a newer one
+  // arrives is skipped and resolves null.
+  private loadQueue: Promise<unknown> = Promise.resolve();
+  private loadSeq = 0;
+
   /** Decodes, resamples to 48 kHz, analyzes, and arms the worklet. */
-  async loadFile(data: ArrayBuffer, name: string): Promise<SourceInfo> {
+  loadFile(data: ArrayBuffer, name: string, onPhase?: (phase: string) => void): Promise<SourceInfo | null> {
+    const seq = ++this.loadSeq;
+    const run = this.loadQueue.then(() =>
+      (seq === this.loadSeq ? this.loadFileNow(data, name, onPhase) : null));
+    this.loadQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async loadFileNow(
+    data: ArrayBuffer,
+    name: string,
+    onPhase?: (phase: string) => void,
+  ): Promise<SourceInfo> {
+    const originalBitDepth = sniffWavBitDepth(data);
+    onPhase?.('DECODING');
+    const ctx = await this.ensureContext();
+    // decodeAudioData resamples to the context rate (48 kHz) for us. Decode
+    // before touching any state, so an unreadable file leaves the current
+    // track fully intact.
+    const decoded = await ctx.decodeAudioData(data.slice(0));
+    onPhase?.('ANALYSING LOUDNESS · PEAKS · STEREO');
+    this.gen++;
     this.spectrogram = null;
+    this.spectrogramPending = null;
     this.tempo = null;
+    this.tempoPending = null;
     this.sourceProfile = null;
     this.clearProcessedPreview();
-    const originalBitDepth = sniffWavBitDepth(data);
-    const ctx = await this.ensureContext();
-    // decodeAudioData resamples to the context rate (48 kHz) for us.
-    const decoded = await ctx.decodeAudioData(data.slice(0));
     const channels = decoded.numberOfChannels;
     const L = decoded.getChannelData(0);
     const R = channels > 1 ? decoded.getChannelData(1) : decoded.getChannelData(0);
@@ -264,7 +296,7 @@ export class AudioEngine {
     const ar = new Float32Array(this.srcR);
     const worker = this.ensureWorker();
     const analyzed: any = await new Promise((resolve) => {
-      this.analyzeResolve = resolve;
+      this.analyzeWaiters.push(resolve);
       worker.postMessage(
         { type: 'analyze', l: al.buffer, r: ar.buffer, fs: TARGET_RATE, buckets: WAVEFORM_BUCKETS },
         [al.buffer, ar.buffer],
@@ -427,42 +459,73 @@ export class AudioEngine {
   async requestSourceProfile(): Promise<{ bands: Float32Array; lufs: number; sideRatioDb: number } | null> {
     if (this.sourceProfile) return this.sourceProfile;
     if (!this.srcL || !this.srcR) return null;
-    this.sourceProfile = await this.profileBuffers(this.srcL, this.srcR);
-    return this.sourceProfile;
+    const gen = this.gen;
+    const profile = await this.profileBuffers(this.srcL, this.srcR);
+    if (gen !== this.gen) return null;
+    this.sourceProfile = profile;
+    return profile;
   }
 
-  /** Detects the track's tempo grid + sections (async, cached). */
+  /**
+   * Detects the track's tempo grid + sections (async, cached per track).
+   * Resolves null if the track changed while the analysis was running.
+   */
   requestTempo(): Promise<TempoInfo | null> {
     if (this.tempo) return Promise.resolve(this.tempo);
+    if (this.tempoPending) return this.tempoPending;
     if (!this.srcL || !this.srcR) return Promise.resolve(null);
     const worker = this.ensureWorker();
+    const gen = this.gen;
     const l = new Float32Array(this.srcL);
     const r = new Float32Array(this.srcR);
-    return new Promise((resolve) => {
-      this.tempoResolve = resolve;
+    const pending = new Promise<TempoInfo | null>((resolve) => {
+      this.tempoWaiters.push((d) => {
+        const t: TempoInfo | null = d.bpm > 0
+          ? {
+              bpm: d.bpm,
+              firstBeatSec: d.firstBeatSec,
+              firstBarSec: d.firstBarSec ?? d.firstBeatSec,
+              confidence: d.confidence,
+              sections: d.sections ?? [],
+            }
+          : null;
+        if (gen !== this.gen) { resolve(null); return; }
+        this.tempo = t;
+        this.tempoPending = null;
+        resolve(t);
+      });
       worker.postMessage(
         { type: 'tempo', l: l.buffer, r: r.buffer, fs: TARGET_RATE },
         [l.buffer, r.buffer],
       );
     });
+    this.tempoPending = pending;
+    return pending;
   }
 
-  /** Computes (once) and returns the source spectrogram. */
+  /** Computes (once per track) and returns the source spectrogram. */
   requestSpectrogram(): Promise<{ cols: number; bands: number; data: Uint8Array } | null> {
     if (this.spectrogram) return Promise.resolve(this.spectrogram);
     if (this.spectrogramPending) return this.spectrogramPending;
     if (!this.srcL || !this.srcR) return Promise.resolve(null);
     const worker = this.ensureWorker();
+    const gen = this.gen;
     const l = new Float32Array(this.srcL);
     const r = new Float32Array(this.srcR);
-    this.spectrogramPending = new Promise((resolve) => {
-      this.spectrogramResolve = resolve;
+    const pending = new Promise<{ cols: number; bands: number; data: Uint8Array } | null>((resolve) => {
+      this.spectrogramWaiters.push((d) => {
+        if (gen !== this.gen) { resolve(null); return; }
+        this.spectrogram = { cols: d.cols, bands: d.bands, data: new Uint8Array(d.data) };
+        this.spectrogramPending = null;
+        resolve(this.spectrogram);
+      });
       worker.postMessage(
         { type: 'spectrogram', l: l.buffer, r: r.buffer, fs: TARGET_RATE },
         [l.buffer, r.buffer],
       );
     });
-    return this.spectrogramPending;
+    this.spectrogramPending = pending;
+    return pending;
   }
 
   get sampleRate(): number { return TARGET_RATE; }

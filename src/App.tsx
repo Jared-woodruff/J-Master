@@ -15,7 +15,7 @@ import { AlbumDialog } from './components/AlbumDialog';
 import { Toasts } from './components/Toasts';
 import { EmptyState } from './components/EmptyState';
 import { KeysDialog } from './components/KeysDialog';
-import { loadDroppedFile } from './lib/filepick';
+import { FileDrop } from './components/FileDrop';
 
 export function App() {
   const loaded = useStore((s) => s.loaded);
@@ -89,29 +89,10 @@ export function App() {
   useEffect(() => {
     const bridge = (window as any).jmaster;
     if (!bridge?.onOpenPath || !bridge?.readFileByPath) return;
-    bridge.onOpenPath(async (path: string) => {
-      const data: ArrayBuffer = await bridge.readFileByPath(path);
+    bridge.onOpenPath((path: string) => {
       const name = path.split(/[\\/]/).pop() ?? 'project.jmaster';
-      await useStore.getState().loadFile(data, name, path);
+      void useStore.getState().loadFile(bridge.readFileByPath(path), name, path);
     });
-  }, []);
-
-  // Whole-window drop target once loaded (swap tracks fast).
-  useEffect(() => {
-    const onDrop = (e: DragEvent) => {
-      e.preventDefault();
-      // When the batch dialog is open it owns the drop target.
-      if (useStore.getState().batchOpen) return;
-      const f = e.dataTransfer?.files?.[0];
-      if (f) void loadDroppedFile(f);
-    };
-    const onDrag = (e: DragEvent) => e.preventDefault();
-    window.addEventListener('drop', onDrop);
-    window.addEventListener('dragover', onDrag);
-    return () => {
-      window.removeEventListener('drop', onDrop);
-      window.removeEventListener('dragover', onDrag);
-    };
   }, []);
 
   return (
@@ -150,6 +131,7 @@ export function App() {
       <MasterItReport />
       <AlbumDialog />
       <KeysDialog />
+      <FileDrop />
       <Toasts />
     </div>
   );

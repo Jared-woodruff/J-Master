@@ -10,6 +10,7 @@ export function MetaFields({ disabled }: { disabled: boolean }) {
   const coverArt = useStore((s) => s.coverArt);
   const setCoverFromFile = useStore((s) => s.setCoverFromFile);
   const clearCover = useStore((s) => s.clearCover);
+  const imageDrag = useStore((s) => (s.fileDrag?.images ?? 0) > 0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Effect-owned object URL: each cover gets a fresh URL whose revoke is
@@ -47,19 +48,12 @@ export function MetaFields({ disabled }: { disabled: boolean }) {
       <div className="formrow">
         <span className="spec flabel">COVER</span>
         <button
-          className={`cover-tile ${coverArt ? 'has' : ''}`}
+          className={`cover-tile ${coverArt ? 'has' : ''} ${imageDrag && !disabled ? 'dragover' : ''}`}
           disabled={disabled}
           title={coverArt
             ? `${coverArt.name} · click to replace`
             : 'Add front-cover art (embedded in the exported file’s tags)'}
           onClick={() => fileRef.current?.click()}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const f = e.dataTransfer.files?.[0];
-            if (f && !disabled) void setCoverFromFile(f);
-          }}
         >
           {coverUrl ? <img src={coverUrl} alt="Cover art" /> : <span className="spec">+ ART</span>}
         </button>
