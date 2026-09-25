@@ -103,6 +103,7 @@ export interface ExportProgress {
 
 const TARGET_RATE = 48000;
 const WAVEFORM_BUCKETS = 4096;
+const SCOPE_SAMPLES = 2048;
 
 type MeterListener = (m: MeterFrame) => void;
 
@@ -111,6 +112,10 @@ export class AudioEngine {
   private node: AudioWorkletNode | null = null;
   private analyser: AnalyserNode | null = null;
   private analyserPre: AnalyserNode | null = null;
+  private scopeL: AnalyserNode | null = null;
+  private scopeR: AnalyserNode | null = null;
+  private scopeBufL: Float32Array<ArrayBuffer> = new Float32Array(SCOPE_SAMPLES);
+  private scopeBufR: Float32Array<ArrayBuffer> = new Float32Array(SCOPE_SAMPLES);
   private worker: Worker | null = null;
   private srcL: Float32Array | null = null;
   private srcR: Float32Array | null = null;
@@ -192,6 +197,18 @@ export class AudioEngine {
     analyserPre.smoothingTimeConstant = 0.82;
     node.connect(analyserPre, 1);
     this.analyserPre = analyserPre;
+    // Stereo tap for the vectorscope: L and R on their own analysers
+    // (AnalyserNode alone would downmix to mono).
+    const splitter = ctx.createChannelSplitter(2);
+    node.connect(splitter, 0);
+    const scopeL = ctx.createAnalyser();
+    const scopeR = ctx.createAnalyser();
+    scopeL.fftSize = SCOPE_SAMPLES;
+    scopeR.fftSize = SCOPE_SAMPLES;
+    splitter.connect(scopeL, 0);
+    splitter.connect(scopeR, 1);
+    this.scopeL = scopeL;
+    this.scopeR = scopeR;
     this.spectrumData = new Uint8Array(analyser.frequencyBinCount);
     this.spectrumPreData = new Uint8Array(analyserPre.frequencyBinCount);
     node.port.onmessage = (e) => {
@@ -432,6 +449,14 @@ export class AudioEngine {
   readSpectrumPre(): Uint8Array {
     if (this.analyserPre) this.analyserPre.getByteFrequencyData(this.spectrumPreData);
     return this.spectrumPreData;
+  }
+
+  /** The last SCOPE_SAMPLES of the output, per channel (vectorscope). */
+  readScope(): { l: Float32Array; r: Float32Array } | null {
+    if (!this.scopeL || !this.scopeR) return null;
+    this.scopeL.getFloatTimeDomainData(this.scopeBufL);
+    this.scopeR.getFloatTimeDomainData(this.scopeBufR);
+    return { l: this.scopeBufL, r: this.scopeBufR };
   }
 
   /** Spectral profile of the loaded source (cached). */

@@ -393,6 +393,8 @@ interface JMasterState {
   monitor: MonitorMode;
   /** Platform whose loudness normalization playback imitates (null = off). */
   normPreview: string | null;
+  /** Which analyser the meters rack shows. */
+  meterView: 'spectrum' | 'scope';
   limiterDelta: boolean;
   balanceDb: number;
   bassMono: boolean;
@@ -471,6 +473,7 @@ interface JMasterState {
   setBypass(on: boolean): void;
   setMonitor(mode: MonitorMode): void;
   setNormPreview(platformId: string | null): void;
+  setMeterView(view: 'spectrum' | 'scope'): void;
   setLimiterDelta(on: boolean): void;
   setBalance(db: number): void;
   autoCenter(): void;
@@ -768,6 +771,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     limiterDelta: false,
     monitor: 'stereo' as const,
     normPreview: null,
+    meterView: 'spectrum' as const,
     balanceDb: 0,
     bassMono: false,
     matchEqGains: [],
@@ -1454,6 +1458,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       pushParams(get);
     },
 
+    setMeterView(view) {
+      set({ meterView: view });
+    },
+
     setMonitor(mode) {
       set({ monitor: mode });
       pushParams(get);
@@ -1978,6 +1986,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     recentFiles: s.recentFiles,
     userPresets: s.userPresets,
     lastPresetId: s.lastPresetId,
+    meterView: s.meterView,
     activeSlot: s.activeSlot,
     snapshots: s.snapshots,
     autoFix: s.autoFix,

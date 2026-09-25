@@ -43,6 +43,8 @@ export function MetersPanel() {
   const normPreview = useStore((s) => s.normPreview);
   const setNormPreview = useStore((s) => s.setNormPreview);
   const normGainDb = useStore(normPreviewGainDb);
+  const meterView = useStore((s) => s.meterView);
+  const setMeterView = useStore((s) => s.setMeterView);
   const [tpHold, setTpHold] = useState(-70);
 
   useEffect(() => {
@@ -138,15 +140,132 @@ export function MetersPanel() {
         </div>
 
         <div className="meter-sep" />
-        <div className="boxlabel">
-          <span className="spec">SPECTRUM</span>
-          <span className="spec">
-            <span style={{ color: 'var(--signal-500)' }}>■</span> OUT&nbsp;&nbsp;
-            <span style={{ color: 'var(--text-secondary)' }}>—</span> SRC
+        <div className="boxlabel" style={{ alignItems: 'center' }}>
+          <span className="seg tabseg" role="tablist" aria-label="Analyser view">
+            <button role="tab" aria-selected={meterView === 'spectrum'} className={meterView === 'spectrum' ? 'on' : ''}
+              title="Live spectrum: the master against the loudness-matched source"
+              onClick={() => setMeterView('spectrum')}>SPECTRUM</button>
+            <button role="tab" aria-selected={meterView === 'scope'} className={meterView === 'scope' ? 'on' : ''}
+              title="Vectorscope: mono is a vertical line, width spreads it sideways, phase trouble leans horizontal"
+              onClick={() => setMeterView('scope')}>SCOPE</button>
           </span>
+          {meterView === 'spectrum' ? (
+            <span className="spec">
+              <span style={{ color: 'var(--signal-500)' }}>■</span> OUT&nbsp;&nbsp;
+              <span style={{ color: 'var(--text-secondary)' }}>—</span> SRC
+            </span>
+          ) : (
+            <span className="spec">M · S · AUTO GAIN</span>
+          )}
         </div>
-        <Spectrum />
+        {meterView === 'spectrum' ? <Spectrum /> : <Scope />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Vectorscope (goniometer): each sample pair is plotted as side (x) against
+ * mid (y), rotated so a left-only signal leans up-left and right-only
+ * up-right. Phosphor-style persistence; auto gain keeps quiet passages
+ * readable, since the display is about image shape, not level.
+ */
+function Scope() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext('2d')!;
+    let raf = 0;
+    let w = 0, h = 0, dpr = 1;
+    let fresh = true;
+    const resize = () => {
+      dpr = window.devicePixelRatio || 1;
+      w = wrap.clientWidth; h = wrap.clientHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      fresh = true;
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
+
+    let gain = 4;
+    let idleFrames = 0;
+    let lastPal: unknown = null;
+    const SQ = Math.SQRT1_2;
+
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      if (w === 0) return;
+      const pal = palette();
+      const playing = useStore.getState().playing;
+      if (!playing && idleFrames > 30 && pal === lastPal && !fresh) return;
+      idleFrames = playing ? 0 : idleFrames + 1;
+      const themeChanged = pal !== lastPal;
+      lastPal = pal;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Persistence: veil the previous frame instead of clearing it.
+      ctx.fillStyle = pal.well;
+      ctx.globalAlpha = fresh || themeChanged ? 1 : 0.3;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalAlpha = 1;
+      fresh = false;
+
+      const cx = w / 2, cy = h / 2;
+      const R = Math.max(10, Math.min(w, h) / 2 - 6);
+      // Guides: M axis (mono), S axis (out of phase), L and R diagonals.
+      ctx.strokeStyle = pal.hair;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + 0.5, cy - R); ctx.lineTo(cx + 0.5, cy + R);
+      ctx.moveTo(cx - R, cy + 0.5); ctx.lineTo(cx + R, cy + 0.5);
+      const d = R * SQ;
+      ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d);
+      ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d);
+      ctx.stroke();
+      ctx.fillStyle = pal.spec;
+      ctx.font = `8px 'IBM Plex Mono', monospace`;
+      ctx.textBaseline = 'top';
+      ctx.fillText('M', cx + 4, cy - R);
+      ctx.fillText('L', cx - d - 8, cy - d - 2);
+      ctx.fillText('R', cx + d + 3, cy - d - 2);
+
+      const data = engine.readScope();
+      if (!data) return;
+      const { l, r } = data;
+      let peak = 0;
+      for (let i = 0; i < l.length; i++) {
+        const x = Math.abs((r[i] - l[i]) * SQ);
+        const y = Math.abs((l[i] + r[i]) * SQ);
+        if (x > peak) peak = x;
+        if (y > peak) peak = y;
+      }
+      if (peak > 1e-4) {
+        const want = 0.9 / Math.max(peak, 0.01);
+        gain += (want - gain) * (want < gain ? 0.35 : 0.04);
+      }
+      ctx.fillStyle = pal.signal;
+      ctx.globalAlpha = 0.55;
+      const k = gain * R;
+      for (let i = 0; i < l.length; i++) {
+        const x = (r[i] - l[i]) * SQ * k;
+        const y = (l[i] + r[i]) * SQ * k;
+        ctx.fillRect(cx + x - 0.6, cy - y - 0.6, 1.3, 1.3);
+      }
+      ctx.globalAlpha = 1;
+    };
+    raf = requestAnimationFrame(draw);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
+
+  return (
+    <div className="spectrum-wrap" ref={wrapRef}>
+      <canvas ref={ref} />
     </div>
   );
 }

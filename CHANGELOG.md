@@ -36,6 +36,10 @@
   loudness target, so a louder master and a more dynamic one can be
   compared at the level listeners actually hear. Playback only: the
   meters keep reading the master and exports are untouched.
+- **Vectorscope.** A SCOPE tab beside SPECTRUM plots the stereo image:
+  mono content is a vertical line, width spreads it sideways, and phase
+  trouble leans toward horizontal. Phosphor-style persistence and auto
+  gain keep quiet passages readable.
 - Fix: the meters rack squashed its rows when space ran short, clipping
   text and the spectrum. It now scrolls instead, and fits without
   scrolling at the default window size.
