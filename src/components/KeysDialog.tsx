@@ -13,7 +13,10 @@ const ROWS: [string, string][] = [
   ['UNDO / REDO', 'CTRL+Z / CTRL+Y'],
   ['FINE KNOB DRAG', 'SHIFT+DRAG'],
   ['RESET KNOB', 'DOUBLE-CLICK · HOME'],
+  ['TYPE A KNOB VALUE', 'CLICK THE READOUT'],
   ['ZOOM / PAN WAVE', 'WHEEL / SHIFT+WHEEL'],
+  ['LOAD A TRACK', 'DROP IT ANYWHERE'],
+  ['QUEUE AN ALBUM', 'DROP SEVERAL TRACKS'],
 ];
 
 export function KeysDialog() {

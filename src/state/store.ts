@@ -315,6 +315,21 @@ export function masterFileName(sourceName: string, encode: EncodeOptions): strin
   return `${base} — Master 48k${encode.bitDepth}.${encode.format}`;
 }
 
+/**
+ * Name for a companion format saved beside the master. Default-named
+ * masters give each format its own default name (no "48k24" on an MP3);
+ * a renamed master lends companions its base name.
+ */
+export function companionFileName(
+  mainName: string,
+  sourceName: string,
+  main: EncodeOptions,
+  extra: EncodeOptions,
+): string {
+  if (mainName === masterFileName(sourceName, main)) return masterFileName(sourceName, extra);
+  return `${mainName.replace(/\.[^.]+$/, '')}.${extra.format}`;
+}
+
 export interface ExportHistoryEntry {
   name: string;
   path: string | null;
@@ -378,6 +393,10 @@ interface JMasterState {
   userPresets: UserPreset[];
   /** The preset the console was last set from, for "modified" + revert. */
   lastPresetId: string | null;
+  /** Extra formats saved beside every export, from the same render. */
+  exportExtras: ExportFormat[];
+  /** Where the last export's companions went (names or paths). */
+  exportExtrasSaved: string[];
 
   macros: MacroValues;
   presetId: string | null;
@@ -531,6 +550,7 @@ interface JMasterState {
   deleteUserPreset(id: string): void;
   /** Re-applies the preset the console was last set from. */
   revertPreset(): void;
+  toggleExportExtra(format: ExportFormat): void;
   setTheme(theme: 'plate' | 'paper'): void;
   setWaveView(view: 'wave' | 'spec'): void;
   openExport(open: boolean): void;
@@ -757,6 +777,8 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     coverArt: null,
     userPresets: [],
     lastPresetId: 'flat',
+    exportExtras: [],
+    exportExtrasSaved: [],
 
     macros: { tone: 0, shape: 0, air: 0, smooth: 0, character: 0, density: 0, impact: 0, width: 1 },
     presetId: 'flat',
@@ -1408,6 +1430,14 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       if (id && findPreset(get(), id)) get().applyPreset(id);
     },
 
+    toggleExportExtra(format) {
+      set((s) => ({
+        exportExtras: s.exportExtras.includes(format)
+          ? s.exportExtras.filter((f) => f !== format)
+          : [...s.exportExtras, format],
+      }));
+    },
+
     applyPlatform(id) {
       const platform = PLATFORMS.find((p) => p.id === id);
       if (!platform) return;
@@ -1740,29 +1770,62 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     startExport(fileName, title) {
       const s = get();
       if (!s.loaded || s.exporting) return;
-      set({ exporting: { phase: 'STARTING', pct: 0 }, exportStats: null, exportSavedTo: null });
+      set({ exporting: { phase: 'STARTING', pct: 0 }, exportStats: null, exportSavedTo: null, exportExtrasSaved: [] });
+      const tags = tagsFrom(s, title);
+      const main: EncodeOptions = { ...encodeOptionsFrom(s), tags };
+      const extras: EncodeOptions[] = s.exportExtras
+        .filter((f) => f !== s.exportFormat)
+        .map((f) => ({ ...encodeOptionsFrom(s), format: f, tags }));
       engine.startExport(
         chainParamsFrom(s),
-        { ...encodeOptionsFrom(s), tags: tagsFrom(s, title) },
+        main,
         (p) => set({ exporting: p }),
         async (result) => {
           set({ exporting: { phase: 'SAVING', pct: 0.98 } });
           const saved = await saveExportFile(result.data, fileName, result.mime);
-          set({ exporting: null, exportStats: result.stats, exportSavedTo: saved });
+          const history: ExportHistoryEntry[] = [];
+          const extrasSaved: string[] = [];
+          const when = new Date().toISOString();
           if (saved) {
-            const entry: ExportHistoryEntry = {
-              name: fileName,
-              path: saved.includes('\\') || saved.includes('/') ? saved : null,
-              format: result.stats.format,
-              bytes: result.stats.bytes,
-              lufs: result.stats.integratedLufs,
-              truePeakDb: result.stats.truePeakDb,
-              when: new Date().toISOString(),
-            };
-            set((s2) => ({ exportHistory: [entry, ...s2.exportHistory].slice(0, 20) }));
+            const isPath = saved.includes('\\') || saved.includes('/');
+            history.push({
+              name: fileName, path: isPath ? saved : null, format: result.stats.format,
+              bytes: result.stats.bytes, lufs: result.stats.integratedLufs,
+              truePeakDb: result.stats.truePeakDb, when,
+            });
+            // Companions go beside the master; the browser preview downloads them.
+            const dir = isPath ? saved.replace(/[\\/][^\\/]*$/, '') : null;
+            const bridge = (window as any).jmaster;
+            for (const x of result.extras ?? []) {
+              const opts = extras.find((e) => e.format === x.format) ?? { ...main, format: x.format as ExportFormat };
+              const name = companionFileName(fileName, s.source!.name, main, opts);
+              try {
+                const where: string | null = dir && bridge?.saveFileTo
+                  ? await bridge.saveFileTo(dir, name, x.data)
+                  : await saveExportFile(x.data, name, x.mime);
+                if (!where) continue;
+                extrasSaved.push(where);
+                history.push({
+                  name, path: where.includes('\\') || where.includes('/') ? where : null, format: x.format,
+                  bytes: x.bytes, lufs: result.stats.integratedLufs, truePeakDb: result.stats.truePeakDb, when,
+                });
+              } catch {
+                get().pushToast(`COULDN'T SAVE ${name.toUpperCase()}`, 'fault');
+              }
+            }
           }
-          get().pushToast(saved ? `MASTER SAVED` : 'EXPORT CANCELLED', saved ? 'run' : 'info');
+          set((s2) => ({
+            exporting: null, exportStats: result.stats, exportSavedTo: saved, exportExtrasSaved: extrasSaved,
+            exportHistory: [...history, ...s2.exportHistory].slice(0, 20),
+          }));
+          get().pushToast(
+            saved
+              ? `MASTER SAVED${extrasSaved.length ? ` · +${extrasSaved.length} FORMAT${extrasSaved.length > 1 ? 'S' : ''}` : ''}`
+              : 'EXPORT CANCELLED',
+            saved ? 'run' : 'info',
+          );
         },
+        extras,
       );
     },
 
@@ -1987,6 +2050,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     userPresets: s.userPresets,
     lastPresetId: s.lastPresetId,
     meterView: s.meterView,
+    exportExtras: s.exportExtras,
     activeSlot: s.activeSlot,
     snapshots: s.snapshots,
     autoFix: s.autoFix,

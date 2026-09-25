@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useStore, masterFileName, encodeOptionsFrom } from '../state/store';
+import type { ExportFormat } from '../audio/encode';
 import { MetaFields } from './MetaFields';
+
+const ALL_FORMATS: ExportFormat[] = ['wav', 'flac', 'mp3', 'opus'];
 
 export function ExportDialog() {
   const open = useStore((s) => s.exportOpen);
@@ -26,8 +29,16 @@ export function ExportDialog() {
   const setAuditionMode = useStore((s) => s.setAuditionMode);
   const stopAudition = useStore((s) => s.stopAudition);
 
+  const exportExtras = useStore((s) => s.exportExtras);
+  const extrasSaved = useStore((s) => s.exportExtrasSaved);
+  const toggleExportExtra = useStore((s) => s.toggleExportExtra);
+
   const [fileName, setFileName] = useState('');
   const [title, setTitle] = useState('');
+
+  const extras = exportExtras.filter((f) => f !== format);
+  const fmtLabel = (f: ExportFormat) =>
+    f === 'mp3' ? `MP3 ${mp3Kbps}` : f === 'opus' ? `OPUS ${opusKbps}` : `${f.toUpperCase()} ${bitDepth}`;
 
   useEffect(() => {
     if (open && source) {
@@ -129,6 +140,21 @@ export function ExportDialog() {
                 </div>
               )}
             </div>
+            <div className="formrow">
+              <span className="spec flabel">ALSO SAVE</span>
+              <div className="chips" role="group" aria-label="Also save these formats">
+                {ALL_FORMATS.filter((f) => f !== format).map((f) => {
+                  const on = extras.includes(f);
+                  return (
+                    <button key={f} className={`chip ${on ? 'on' : ''}`} disabled={busy} aria-pressed={on}
+                      title={`Also save ${fmtLabel(f)} beside the master · rendered once, same loudness`}
+                      onClick={() => toggleExportExtra(f)}>
+                      {on ? '✓' : '+'} {fmtLabel(f)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </>
         )}
 
@@ -160,6 +186,9 @@ export function ExportDialog() {
             />
             <StatRow label="SIZE" value={`${(stats.bytes / (1024 * 1024)).toFixed(1)} MB`} />
             {savedTo && <StatRow label="SAVED" value={savedTo} />}
+            {extrasSaved.map((p, i) => (
+              <StatRow key={p} label={i === 0 ? 'ALSO SAVED' : ''} value={p.split(/[\\/]/).pop() ?? p} />
+            ))}
           </div>
         )}
 
@@ -231,7 +260,7 @@ export function ExportDialog() {
               <button className="btn btn-secondary" disabled={busy} onClick={() => openExport(false)}>CANCEL</button>
               <button className="btn btn-accent" disabled={busy || !fileName.trim()}
                 onClick={() => startExport(fileName.trim(), title.trim())}>
-                {busy ? 'RENDERING…' : 'RENDER + SAVE'}
+                {busy ? 'RENDERING…' : extras.length > 0 ? `RENDER + SAVE ${extras.length + 1} FILES` : 'RENDER + SAVE'}
               </button>
             </>
           )}

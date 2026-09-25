@@ -481,6 +481,10 @@
   border-radius: 0;
 }
 .knob-svg { cursor: ns-resize; touch-action: none; }
+.knob-svg .knob-face { transition: stroke var(--dur-fast) var(--ease-mech); }
+.knob-svg:hover .knob-face { stroke: var(--border-mid); }
+.knob-svg.grabbed .knob-face { stroke: var(--signal-500); stroke-width: 1.5; }
+.knobcell .kvalue.grabbed { color: var(--text-accent); }
 
 .subrow { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr); gap: var(--space-3); align-items: stretch; }
 
@@ -675,7 +679,7 @@
 }
 .dropcard.reject { border-color: var(--border-mid); }
 .dropcard .headline { font-size: clamp(26px, 5vw, 38px); }
-.dropcard .spec { white-space: normal; }
+.dropcard .spec { white-space: normal; text-wrap: balance; }
 .dropband { border: 1px dashed var(--signal-500); padding: 14px; text-align: center; }
 .batchlist.dragover { border-color: var(--signal-500); }
 .cover-tile.dragover { border-color: var(--signal-500); border-style: dashed; }
@@ -821,6 +825,23 @@
 .formrow input[type='text'] { min-width: 0; }
 .seg.grow { flex: 1; }
 .seg.grow button { flex: 1; text-align: center; }
+
+/* toggle chips (export: also save) */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  height: 26px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-mid);
+  transition: border-color var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
+}
+.chip:hover:not(:disabled) { color: var(--text-body); border-color: var(--text-secondary); }
+.chip.on { color: var(--text-body); border-color: var(--signal-500); }
+.chip:disabled { opacity: 0.4; cursor: default; }
+.chip:active:not(:disabled) { transform: translateY(var(--press-shift)); }
 
 /* cover art tile */
 .cover-tile {

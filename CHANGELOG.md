@@ -36,6 +36,14 @@
   loudness target, so a louder master and a more dynamic one can be
   compared at the level listeners actually hear. Playback only: the
   meters keep reading the master and exports are untouched.
+- **ALSO SAVE in EXPORT.** Tick extra formats and they are encoded from
+  the same render and saved beside the master, for example a WAV for
+  distribution plus an MP3 for sharing: one loudness solve, one pass. A
+  WAV and FLAC from the same render are bit-identical.
+- Fix: the save dialog offered a "WAV audio" file type for every format;
+  it now matches the format being exported.
+- Knobs light up while you hold them, and the keys sheet covers typing a
+  value and dropping files.
 - **Vectorscope.** A SCOPE tab beside SPECTRUM plots the stereo image:
   mono content is a vertical line, width spreads it sideways, and phase
   trouble leans toward horizontal. Phosphor-style persistence and auto

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import { readFile, writeFile, appendFile, open } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { join, basename, extname } from 'node:path';
 
 let win: BrowserWindow | null = null;
 let pendingOpenPath: string | null = null;
@@ -149,12 +149,22 @@ ipcMain.handle('jmaster:patchFile', async (_e, path: string, offset: number, dat
   }
 });
 
+// The file-type filter follows the export format (it used to say WAV for
+// every format).
+const SAVE_FILTERS: Record<string, { name: string; extensions: string[] }> = {
+  wav: { name: 'WAV audio', extensions: ['wav'] },
+  flac: { name: 'FLAC audio', extensions: ['flac'] },
+  mp3: { name: 'MP3 audio', extensions: ['mp3'] },
+  opus: { name: 'Ogg Opus audio', extensions: ['opus', 'ogg'] },
+};
+
 ipcMain.handle('jmaster:saveFile', async (_e, defaultName: string, data: ArrayBuffer) => {
   if (!win) return null;
+  const ext = extname(defaultName).slice(1).toLowerCase();
   const res = await dialog.showSaveDialog(win, {
     title: 'Save master',
     defaultPath: defaultName,
-    filters: [{ name: 'WAV audio', extensions: ['wav'] }],
+    filters: [SAVE_FILTERS[ext] ?? SAVE_FILTERS.wav],
   });
   if (res.canceled || !res.filePath) return null;
   await writeFile(res.filePath, Buffer.from(data));

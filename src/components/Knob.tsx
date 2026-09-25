@@ -39,6 +39,8 @@ function arcPath(cx: number, cy: number, r: number, a0: number, a1: number): str
 export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format, onChange, size = 58, entryScale = 1 }: KnobProps) {
   const drag = useRef<{ startY: number; startVal: number } | null>(null);
   const [editing, setEditing] = useState(false);
+  // Lit while held, like a console control under your hand.
+  const [grabbed, setGrabbed] = useState(false);
 
   const commitEntry = useCallback((text: string) => {
     setEditing(false);
@@ -50,6 +52,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
   const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     drag.current = { startY: e.clientY, startVal: value };
+    setGrabbed(true);
   }, [value]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
@@ -59,7 +62,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
     onChange(clamp(drag.current.startVal + delta, min, max));
   }, [max, min, onChange]);
 
-  const onPointerUp = useCallback(() => { drag.current = null; }, []);
+  const onPointerUp = useCallback(() => { drag.current = null; setGrabbed(false); }, []);
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     const step = (max - min) / (e.shiftKey ? 200 : 50);
@@ -81,7 +84,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
     <>
       <span className="spec klabel">{label}</span>
       <svg
-        className="knob-svg"
+        className={`knob-svg ${grabbed ? 'grabbed' : ''}`}
         width={size}
         height={size}
         role="slider"
@@ -94,6 +97,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onLostPointerCapture={onPointerUp}
         onDoubleClick={() => onChange(defaultValue)}
         onWheel={onWheel}
         onKeyDown={(e) => {
@@ -120,7 +124,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
           />
         )}
         {/* dial face */}
-        <circle cx={c} cy={c} r={rArc - 8} fill="var(--surface-control)" stroke="var(--border-hairline)" />
+        <circle className="knob-face" cx={c} cy={c} r={rArc - 8} fill="var(--surface-control)" stroke="var(--border-hairline)" />
         {/* needle */}
         <line x1={c} y1={c} x2={nx} y2={ny} stroke={engaged ? 'var(--signal-500)' : 'var(--text-secondary)'} strokeWidth="2" />
         {/* spindle: the Jamware square */}
@@ -141,7 +145,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
         />
       ) : (
         <span
-          className="kvalue"
+          className={`kvalue ${grabbed ? 'grabbed' : ''}`}
           title="Click to type a value"
           onClick={() => setEditing(true)}
         >{format(value)}</span>

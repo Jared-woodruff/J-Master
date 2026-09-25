@@ -94,6 +94,8 @@ export interface RenderResult {
   ext: string;
   mime: string;
   stats: ExportStats;
+  /** Companion formats encoded from the same render. */
+  extras?: { data: ArrayBuffer; ext: string; mime: string; format: string; bytes: number }[];
 }
 
 export interface ExportProgress {
@@ -242,7 +244,7 @@ export class AudioEngine {
         this.renderHandlers.onProgress({ phase: d.phase, pct: d.pct });
       } else if (d.type === 'done' && this.renderHandlers) {
         this.rendering = false;
-        this.renderHandlers.onDone({ data: d.wav, ext: d.ext, mime: d.mime, stats: d.stats });
+        this.renderHandlers.onDone({ data: d.wav, ext: d.ext, mime: d.mime, stats: d.stats, extras: d.extras ?? [] });
         this.renderHandlers = null;
       } else if (d.type === 'render-error' && this.renderHandlers) {
         this.rendering = false;
@@ -561,6 +563,7 @@ export class AudioEngine {
     encode: EncodeOptions,
     onProgress: (p: ExportProgress) => void,
     onDone: (result: RenderResult) => void,
+    extras: EncodeOptions[] = [],
   ): void {
     if (!this.srcL || !this.srcR || !this.source) return;
     const worker = this.ensureWorker();
@@ -581,6 +584,7 @@ export class AudioEngine {
         params: fullParams,
         sourceLufs: this.source.lufs,
         encode,
+        extras,
       },
       [l.buffer, r.buffer],
     );

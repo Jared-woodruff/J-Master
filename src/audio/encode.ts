@@ -39,11 +39,27 @@ export interface Encoded {
   mime: string;
 }
 
+/**
+ * Per-render cache of dithered integer samples by bit depth. Passing the
+ * same cache to every encode of one render keeps its WAV and FLAC
+ * bit-identical (one TPDF dither draw, not one per file).
+ */
+export type QuantCache = Map<number, { qL: Int32Array; qR: Int32Array }>;
+
+function quantized(L: Float32Array, R: Float32Array, bitDepth: 16 | 24, cache?: QuantCache) {
+  const hit = cache?.get(bitDepth);
+  if (hit) return hit;
+  const q = quantizeStereo(L, R, bitDepth);
+  cache?.set(bitDepth, q);
+  return q;
+}
+
 export async function encodeAudio(
   L: Float32Array,
   R: Float32Array,
   sampleRate: number,
   opts: EncodeOptions,
+  cache?: QuantCache,
 ): Promise<Encoded> {
   const t = opts.tags;
   const trackStr = t?.trackNumber
@@ -62,7 +78,7 @@ export async function encodeAudio(
         track: trackStr,
         picture: t.picture,
       };
-      const { qL, qR } = quantizeStereo(L, R, opts.bitDepth);
+      const { qL, qR } = quantized(L, R, opts.bitDepth, cache);
       return {
         data: encodeWavFromInt(qL, qR, sampleRate, opts.bitDepth, wavTags),
         ext: 'wav', mime: 'audio/wav',
@@ -79,7 +95,7 @@ export async function encodeAudio(
       if (t?.comment) flacTags.COMMENT = t.comment;
       if (trackStr) flacTags.TRACKNUMBER = `${t!.trackNumber}`;
       if (t?.trackTotal) flacTags.TRACKTOTAL = `${t.trackTotal}`;
-      const { qL, qR } = quantizeStereo(L, R, opts.bitDepth);
+      const { qL, qR } = quantized(L, R, opts.bitDepth, cache);
       return {
         data: encodeFlacFromInt(qL, qR, sampleRate, opts.bitDepth, flacTags, t?.picture),
         ext: 'flac', mime: 'audio/flac',

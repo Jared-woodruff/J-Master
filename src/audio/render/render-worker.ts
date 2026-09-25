@@ -14,7 +14,7 @@ import {
   loudnessRangeFromHops,
 } from '../dsp/loudness';
 import { ChainParams, NOMINAL_LUFS, dbToLin } from '../dsp/params';
-import { encodeAudio, EncodeOptions } from '../encode';
+import { encodeAudio, EncodeOptions, QuantCache } from '../encode';
 
 const BLOCK = 4096;
 
@@ -41,6 +41,8 @@ interface RenderMsg {
   params: ChainParams;
   sourceLufs: number;
   encode: EncodeOptions;
+  /** Companion formats, encoded from the same rendered buffers. */
+  extras?: EncodeOptions[];
   reqId?: number;
 }
 
@@ -820,10 +822,26 @@ async function render(msg: RenderMsg): Promise<void> {
     gainDb += err * 0.95;
   }
 
-  post({ type: 'progress', reqId: msg.reqId, phase: `ENCODING ${msg.encode.format.toUpperCase()}`, pct: 0.92 });
+  post({ type: 'progress', reqId: msg.reqId, phase: `ENCODING ${msg.encode.format.toUpperCase()}`, pct: 0.9 });
   const truePeakDb = measureTruePeakDb(outL, outR);
   const samplePeakDb = measureSamplePeakDb(outL, outR);
-  const encoded = await encodeAudio(outL, outR, fs, msg.encode);
+  const quant: QuantCache = new Map();
+  const encoded = await encodeAudio(outL, outR, fs, msg.encode, quant);
+
+  // Companions: one loudness solve, several deliverables. Each encoder
+  // reads the rendered buffers without modifying them, and the shared
+  // quantization keeps a WAV and FLAC of one render bit-identical.
+  const extras: { data: ArrayBuffer; ext: string; mime: string; format: string; bytes: number }[] = [];
+  const wanted = msg.extras ?? [];
+  for (let i = 0; i < wanted.length; i++) {
+    post({
+      type: 'progress', reqId: msg.reqId,
+      phase: `ENCODING ${wanted[i].format.toUpperCase()}`,
+      pct: 0.9 + (0.08 * (i + 1)) / (wanted.length + 1),
+    });
+    const x = await encodeAudio(outL, outR, fs, wanted[i], quant);
+    extras.push({ data: x.data, ext: x.ext, mime: x.mime, format: wanted[i].format, bytes: x.data.byteLength });
+  }
 
   post(
     {
@@ -846,7 +864,8 @@ async function render(msg: RenderMsg): Promise<void> {
         opusKbps: msg.encode.opusKbps,
         bytes: encoded.data.byteLength,
       },
+      extras,
     },
-    [encoded.data],
+    [encoded.data, ...extras.map((x) => x.data)],
   );
 }
