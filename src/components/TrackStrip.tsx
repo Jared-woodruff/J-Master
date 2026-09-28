@@ -1,4 +1,5 @@
 import { useStore } from '../state/store';
+import { driftRange, mmss } from '../lib/tempo-text';
 
 function fmtTime(sec: number, ms = true): string {
   const m = Math.floor(sec / 60);
@@ -17,7 +18,7 @@ export function TrackStrip() {
   const tempo = useStore((s) => s.tempo);
   const metronome = useStore((s) => s.metronome);
   const setMetronome = useStore((s) => s.setMetronome);
-  const diagIssueCount = useStore((s) => s.diagIssues.length);
+  const diagIssueCount = useStore((s) => s.diagIssues.length + (s.tempo?.drift ? 1 : 0));
   const openDiag = useStore((s) => s.openDiag);
   const togglePlay = useStore((s) => s.togglePlay);
   const stop = useStore((s) => s.stop);
@@ -54,9 +55,16 @@ export function TrackStrip() {
         <div className="specs">
           <span className="spec">IN {source.lufs.toFixed(1)} LUFS</span>
           <span className="spec">{(source.originalSampleRate / 1000).toFixed(1)}K{source.originalBitDepth ? `/${source.originalBitDepth}` : ''}→48K</span>
-          <span className="spec" style={tempo && tempo.confidence > 0.25 ? { color: 'var(--text-body)' } : undefined}>
-            {tempo ? `${tempo.bpm.toFixed(1)} BPM${tempo.confidence < 0.25 ? ' ?' : ''}` : '… BPM'}
-          </span>
+          {tempo?.drift ? (
+            <span className="spec" style={{ color: 'var(--warn-500)' }}
+              title={`Tempo drifts from ${tempo.drift.refBpm.toFixed(1)} BPM to ${tempo.drift.endBpm.toFixed(1)} from ${mmss(tempo.drift.regions[0]?.startSec ?? 0)} · the grid and CLICK follow the beats · DIAG for detail`}>
+              {driftRange(tempo.drift)}
+            </span>
+          ) : (
+            <span className="spec" style={tempo && tempo.confidence > 0.25 ? { color: 'var(--text-body)' } : undefined}>
+              {tempo ? `${tempo.bpm.toFixed(1)} BPM${tempo.confidence < 0.25 ? ' ?' : ''}` : '… BPM'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -111,7 +119,9 @@ export function TrackStrip() {
           <button
             className={`btn btn-sm btn-toggle ${metronome ? 'on' : ''}`}
             onClick={() => setMetronome(!metronome)}
-            title={tempo ? `Metronome click at ${tempo.bpm.toFixed(1)} BPM · never exported` : 'Metronome · waiting for tempo detection'}
+            title={tempo?.drift
+              ? 'Metronome on the tracked beats, following the drift · never exported'
+              : tempo ? `Metronome click at ${tempo.bpm.toFixed(1)} BPM · never exported` : 'Metronome · waiting for tempo detection'}
             disabled={!tempo}
           >
             <span className={`lamp ${metronome ? 'signal' : ''}`} />

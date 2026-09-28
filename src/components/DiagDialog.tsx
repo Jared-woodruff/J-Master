@@ -1,12 +1,53 @@
 // TRACK DIAGNOSIS — the source check sheet. Runs at load; flags common
 // AI-music pathologies (bass in sides, unstable width, image lean, harsh
-// highs) with
-// measured values and one-click fixes, plus the dynamics report (PLR/LRA)
-// and the per-platform delivery table. Nothing is ever applied silently
-// unless the user has armed AUTO-FIX.
-import { useStore } from '../state/store';
+// highs, tempo drift) with measured values and one-click fixes where a fix
+// exists, plus the dynamics report (PLR/LRA) and the per-platform delivery
+// table. Nothing is ever applied silently unless the user has armed
+// AUTO-FIX.
+import { useStore, TEMPO_CHECK } from '../state/store';
 import type { DiagIssue } from '../state/store';
+import type { TempoInfo, TempoDrift } from '../audio/engine';
 import { PLATFORMS } from '../audio/dsp/params';
+import { driftDelta, mmss, slipText } from '../lib/tempo-text';
+
+/** The tempo curve at a glance: the reference, the curve, the drift. */
+function DriftChart({ tempo, drift, durSec }: { tempo: TempoInfo; drift: TempoDrift; durSec: number }) {
+  const curve = tempo.curve;
+  if (!curve) return null;
+  const W = 480, H = 64, padT = 6, padB = 12;
+  const vals = curve.bpm.filter(Number.isFinite);
+  const lo = Math.min(drift.refBpm, ...vals) - 0.4;
+  const hi = Math.max(drift.refBpm, ...vals) + 0.4;
+  const x = (sec: number) => (sec / durSec) * W;
+  const y = (bpm: number) => padT + (1 - (bpm - lo) / (hi - lo)) * (H - padT - padB);
+  const pts = curve.bpm
+    .map((v, i) => (Number.isFinite(v) ? `${x(curve.startSec + i * curve.stepSec).toFixed(1)},${y(v).toFixed(1)}` : ''))
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <svg className="driftchart" viewBox={`0 0 ${W} ${H}`} role="img"
+      aria-label={`Tempo curve from ${drift.refBpm.toFixed(1)} to ${drift.endBpm.toFixed(1)} BPM`}>
+      <defs>
+        <clipPath id="drift-regions">
+          {drift.regions.map((r, i) => (
+            <rect key={i} x={x(r.startSec)} y={0} width={Math.max(1, x(r.endSec) - x(r.startSec))} height={H} />
+          ))}
+        </clipPath>
+      </defs>
+      {drift.regions.map((r, i) => (
+        <rect key={i} x={x(r.startSec)} y={padT} width={Math.max(1, x(r.endSec) - x(r.startSec))}
+          height={H - padT - padB} className="drift-zone" />
+      ))}
+      <line x1={0} x2={W} y1={y(drift.refBpm)} y2={y(drift.refBpm)} className="drift-ref" />
+      <polyline points={pts} className="drift-curve" />
+      <polyline points={pts} className="drift-curve hot" clipPath="url(#drift-regions)" />
+      <text x={2} y={y(drift.refBpm) - 3} className="drift-label">{drift.refBpm.toFixed(1)}</text>
+      <text x={W - 2} y={y(drift.endBpm) - 3} className="drift-label" textAnchor="end">{drift.endBpm.toFixed(1)}</text>
+      <text x={2} y={H - 1} className="drift-label">0:00</text>
+      <text x={W - 2} y={H - 1} className="drift-label" textAnchor="end">{mmss(durSec)}</text>
+    </svg>
+  );
+}
 
 export function DiagDialog() {
   const open = useStore((s) => s.diagOpen);
@@ -22,8 +63,26 @@ export function DiagDialog() {
   const macros = useStore((s) => s.macros);
   const bassMono = useStore((s) => s.bassMono);
   const balanceDb = useStore((s) => s.balanceDb);
+  const tempo = useStore((s) => s.tempo);
 
   if (!open || !source) return null;
+  const drift = tempo?.drift ?? null;
+  const flagged = checks.filter((c) => !c.pass).length;
+
+  const showDrift = () => {
+    if (!drift) return;
+    const st = useStore.getState();
+    st.setTempoLane(true);
+    const first = drift.regions[0];
+    const span = first ? first.endSec - first.startSec : source.durationSec;
+    if (first && span < source.durationSec * 0.8) {
+      const pad = Math.max(4, span * 0.08);
+      st.focusWave(Math.max(0, first.startSec - pad), Math.min(source.durationSec, first.endSec + pad));
+    } else {
+      st.focusWave(0, source.durationSec);
+    }
+    openDiag(false);
+  };
 
   // A fix counts as applied while the console state still covers it, so
   // reopening the sheet reports what is already handled instead of
@@ -54,7 +113,7 @@ export function DiagDialog() {
           <div className="display dtitle">Track diagnosis</div>
           <div className="spec" title={source.name}
             style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            SOURCE CHECKS · {issues.length === 0 ? 'ALL CLEAR' : `${issues.length} FOUND`} · {source.name.toUpperCase()}
+            SOURCE CHECKS · {flagged === 0 ? 'ALL CLEAR' : `${flagged} FOUND`} · {source.name.toUpperCase()}
           </div>
         </div>
 
@@ -67,7 +126,55 @@ export function DiagDialog() {
               <span className="spec-value" style={{ fontSize: 11 }}>{c.spec}</span>
             </div>
           ))}
+          {!checks.some((c) => c.label === TEMPO_CHECK) && (
+            <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+              <span className="lamp" />
+              <span className="spec">{TEMPO_CHECK}</span>
+              <span className="leader" />
+              <span className="spec-value" style={{ fontSize: 11 }}>MEASURING…</span>
+            </div>
+          )}
         </div>
+
+        {drift && tempo && (
+          <>
+            <div className="boxlabel" style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 10 }}>
+              <span className="spec" style={{ color: 'var(--text-body)' }}>TEMPO DRIFT</span>
+              <span className="spec">NO AUDIO FIX · FLAGGED</span>
+            </div>
+            <DriftChart tempo={tempo} drift={drift} durSec={source.durationSec} />
+            <div className="statgrid">
+              <div className="row">
+                <span className="spec">SETS OUT AT</span>
+                <span className="leader" />
+                <span className="spec-value">{drift.refBpm.toFixed(1)} BPM</span>
+              </div>
+              {drift.regions.slice(0, 3).map((r, i) => (
+                <div className="row" key={i}>
+                  <span className="spec">{i === 0 ? 'DRIFTS' : 'AGAIN'} {mmss(r.startSec)} → {mmss(r.endSec)}</span>
+                  <span className="leader" />
+                  <span className="spec-value" style={{ color: 'var(--warn-500)' }}>
+                    {driftDelta(drift, r.peakBpm)} BY {mmss(r.peakSec)}
+                  </span>
+                </div>
+              ))}
+              <div className="row">
+                <span className="spec">A FIXED GRID SLIDES</span>
+                <span className="leader" />
+                <span className="spec-value">{slipText(drift, tempo.bpm)} OFF</span>
+              </div>
+            </div>
+            <div className="drow" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span className="spec" style={{ lineHeight: 1.5, whiteSpace: 'normal', minWidth: 0, flex: '1 1 auto' }}>
+                THE GRID AND CLICK NOW FOLLOW THE BEATS. FOR DJ SETS, VIDEO SYNC OR TEMPO-SYNCED
+                EFFECTS, REGENERATE OR WARP TO A FIXED TEMPO FIRST.
+              </span>
+              <button className="btn btn-sm btn-secondary" style={{ flex: 'none' }} onClick={showDrift}>
+                SHOW ON WAVEFORM →
+              </button>
+            </div>
+          </>
+        )}
 
         {issues.length > 0 && (
           <>

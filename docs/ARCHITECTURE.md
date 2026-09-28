@@ -103,11 +103,24 @@ All in the render worker (`render-worker.ts`):
   multi-resolution waveform peak pyramid, the short-term loudness lane, and
   the diagnosis measurements (side-bass ratio, windowed correlation,
   HF share).
-- **tempo:** spectral-flux onset envelope → autocorrelation with octave
-  weighting and parabolic refinement; beat phase from squared low-band
-  onsets (kick/bass own the downbeat); section detection via checkerboard
-  novelty on 8-band features, snapped to bars; bar phase chosen so bars
-  start on section boundaries.
+- **tempo** (`src/audio/analysis/tempo.ts`): spectral-flux onset envelope
+  → autocorrelation with octave weighting and parabolic refinement, sought
+  near the tempo that 20 s windows vote for (a drifting tempo smears the
+  whole-track peak and can let a dotted rhythm win); beat phase from squared
+  low-band onsets (kick/bass own the downbeat); section detection via
+  checkerboard novelty on 8-band features, snapped to bars; bar phase chosen
+  so bars start on section boundaries.
+- **tempo over time:** a tempo curve (12 s windows every second: beat lag
+  first, then refined on the four-beat lag), beats tracked through it by
+  dynamic programming (after Ellis 2007, stiff enough to hold the beat
+  through drumless passages) on the same kick-led onsets, and the best fixed
+  grid through those beats. A steady track adopts that grid (within ~11 ms
+  of every true beat on the generated fixtures). A track is **drifting**
+  when its curve moves at least 0.35% and either the beats slide an eighth
+  of a beat (or 60 ms) off the best fixed grid or the curve moves 1% or
+  more; drift regions are measured against the tempo the track sets out at.
+  A drifting track's GRID and CLICK follow the tracked beats (the worklet
+  takes them in a `beats` message).
 - **profile:** 30-band average spectrum + side/mid ratio, used by reference
   matching and AUTO-MASTER's genre heuristics.
 - **preview:** full-chain render reduced to overlay peaks + loudness lane.

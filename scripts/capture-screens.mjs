@@ -54,13 +54,8 @@ try {
   await sleep(2400);
   await shoot('03-adv-eq');
 
-  // The diagnosis sheet.
-  await app.store(`(st().togglePlay(), st().setAdvEqOpen(false), st().openDiag(true), 1)`);
-  await settle(app, 800);
-  await shoot('04-diagnosis');
-
   // PAPER, the light theme.
-  await app.store(`(st().openDiag(false), st().setTheme('paper'), st().seekSec(56), st().togglePlay(), 1)`);
+  await app.store(`(st().togglePlay(), st().setAdvEqOpen(false), st().setTheme('paper'), st().seekSec(56), st().togglePlay(), 1)`);
   await sleep(2400);
   await shoot('05-paper');
 
@@ -74,6 +69,17 @@ try {
   await app.eval(`(window.__demo.ghost('<span class="ic">WAV</span>4 files<span class="badge">+ COPY</span>'), window.__demo.place(${x}, ${y}))`);
   await shoot('06-drop', { cursor: true });
   await cancel();
+
+  // The diagnosis sheet, on an extended take whose tempo runs away.
+  const extended = join(work, 'midnight-static (extended).wav');
+  execFileSync(process.execPath, ['scripts/make-demo-song.mjs', extended, '--drift'], { stdio: 'inherit' });
+  const wave = await app.box('.waveframe');
+  await app.dropFiles([extended], wave.x, wave.y, { ms: 150 });
+  await app.eval(`(async () => { const st = () => window.__jmaster.store.getState();
+    for (let i = 0; i < 200; i++) { if (st().source?.name.includes('extended') && st().tempo) return; await new Promise(r => setTimeout(r, 100)); } })()`);
+  await app.store(`(st().openDiag(true), 1)`);
+  await settle(app, 800);
+  await shoot('04-diagnosis');
 
   if (app.problems.length) console.log('page problems:\n  ' + app.problems.join('\n  '));
 } finally {

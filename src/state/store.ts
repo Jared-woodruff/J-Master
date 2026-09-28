@@ -8,13 +8,15 @@ import type { GenrePreset } from '../audio/dsp/params';
 import {
   engine, MeterFrame, SourceInfo, ExportStats, ExportProgress,
 } from '../audio/engine';
+import type { TempoInfo } from '../audio/engine';
 import type { EncodeOptions, ExportFormat, TrackTags } from '../audio/encode';
 import { filePathOf } from '../lib/filepath';
+import { driftRange, mmss } from '../lib/tempo-text';
 
 export interface Toast {
   id: number;
   text: string;
-  kind: 'info' | 'run' | 'fault';
+  kind: 'info' | 'run' | 'warn' | 'fault';
 }
 
 export interface ConsoleSnapshot {
@@ -221,6 +223,45 @@ function deriveDiagnosis(
   }
 
   return { issues, checks };
+}
+
+export const TEMPO_CHECK = 'TEMPO STABILITY';
+
+/** The check-sheet row for the tempo analysis. */
+function tempoCheck(t: TempoInfo): DiagCheck {
+  if (t.drift) {
+    return {
+      label: TEMPO_CHECK,
+      spec: `DRIFTS ${driftRange(t.drift)} FROM ${mmss(t.drift.regions[0]?.startSec ?? 0)}`,
+      pass: false,
+    };
+  }
+  const vals = (t.curve?.bpm ?? []).filter(Number.isFinite);
+  if (t.confidence < 0.25 || vals.length === 0) {
+    return { label: TEMPO_CHECK, spec: 'NO CLEAR PULSE · NOT JUDGED', pass: true };
+  }
+  const spread = (Math.max(...vals) - Math.min(...vals)) / 2;
+  return { label: TEMPO_CHECK, spec: `STEADY ${t.bpm.toFixed(1)} BPM · ±${spread.toFixed(2)}`, pass: true };
+}
+
+/**
+ * A tempo analysis arrives: the grid, the CLICK (which follows the tracked
+ * beats when the tempo drifts), and the tempo row of the check sheet.
+ */
+function applyTempo(
+  t: TempoInfo | null,
+  set: (fn: (s: JMasterState) => Partial<JMasterState>) => void,
+  get: () => JMasterState,
+): void {
+  set((s) => ({
+    tempo: t,
+    diagChecks: [...s.diagChecks.filter((c) => c.label !== TEMPO_CHECK), ...(t ? [tempoCheck(t)] : [])],
+  }));
+  engine.setClickBeats(t?.drift ? t.beats : null, t?.downbeat ?? 0);
+  pushParams(get);
+  if (t?.drift) {
+    get().pushToast(`TEMPO DRIFTS ${driftRange(t.drift)} · SEE DIAG`, 'warn');
+  }
 }
 
 async function openProject(
@@ -434,7 +475,11 @@ interface JMasterState {
   metronome: boolean;
   gridEnabled: boolean;
   loudnessLane: boolean;
+  /** Tempo lane on the waveform (shown when the tempo drifts). */
+  tempoLane: boolean;
   tempo: import('../audio/engine').TempoInfo | null;
+  /** A request for the waveform to frame a stretch of the track. */
+  waveFocus: { startSec: number; endSec: number; seq: number } | null;
 
   diagOpen: boolean;
   diagIssues: DiagIssue[];
@@ -499,6 +544,9 @@ interface JMasterState {
   setMetronome(on: boolean): void;
   setGridEnabled(on: boolean): void;
   setLoudnessLane(on: boolean): void;
+  setTempoLane(on: boolean): void;
+  /** Frames [startSec, endSec] on the waveform. */
+  focusWave(startSec: number, endSec: number): void;
   switchSlot(slot: 'A' | 'B'): void;
   openDiag(open: boolean): void;
   toggleDiagIssue(id: string): void;
@@ -810,7 +858,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     metronome: false,
     gridEnabled: true,
     loudnessLane: true,
+    tempoLane: true,
     tempo: null,
+    waveFocus: null,
     activeSlot: 'A' as const,
     snapshots: { A: null, B: null },
     diagOpen: false,
@@ -922,8 +972,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         // Tempo detection runs in the background; the grid appears when ready.
         void engine.requestTempo().then((t) => {
           if (get().source !== source) return;
-          set({ tempo: t });
-          pushParams(get);
+          applyTempo(t, set, get);
         });
       } catch (err) {
         if (token !== loadToken) return;
@@ -1317,7 +1366,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           const brightDb = bandAt(6000, 16000);
           const midDb = bandAt(250, 2000);
           const bpm = tempo?.bpm ?? 0;
-          reasons.push(`TEMPO ${bpm > 0 ? bpm.toFixed(1) + ' BPM' : 'UNCLEAR'}`);
+          reasons.push(tempo?.drift
+            ? `TEMPO ${bpm.toFixed(1)} BPM AVERAGE · DRIFTS ${driftRange(tempo.drift)}`
+            : `TEMPO ${bpm > 0 ? bpm.toFixed(1) + ' BPM' : 'UNCLEAR'}`);
           reasons.push(`SUB ${subDb >= 0 ? '+' : ''}${subDb.toFixed(1)} dB · BRIGHT ${brightDb >= 0 ? '+' : ''}${brightDb.toFixed(1)} dB · MID ${midDb >= 0 ? '+' : ''}${midDb.toFixed(1)} dB`);
           if (bpm >= 155 && subDb > 2) { presetPick = 'dnb'; reasons.push('FAST + SUB-HEAVY → DRUM & BASS'); }
           else if (bpm >= 118 && bpm <= 138 && subDb > 1.5) { presetPick = 'house'; reasons.push('CLUB TEMPO + SUB → EDM / HOUSE'); }
@@ -1343,6 +1394,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         } else {
           reasons.push('SOURCE CHECKS CLEAN — NO FIXES NEEDED');
         }
+        if (tempo?.drift) reasons.push('TEMPO DRIFT FLAGGED · NO AUDIO FIX · SEE DIAG');
         set({ masterItReport: { presetName: preset.name, reasons }, masterItBusy: false });
       } catch {
         set({ masterItBusy: false });
@@ -1527,6 +1579,14 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     setLoudnessLane(on) {
       set({ loudnessLane: on });
+    },
+
+    setTempoLane(on) {
+      set({ tempoLane: on });
+    },
+
+    focusWave(startSec, endSec) {
+      set((s) => ({ waveFocus: { startSec, endSec, seq: (s.waveFocus?.seq ?? 0) + 1 } }));
     },
 
     openDiag(open) {
@@ -2045,6 +2105,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     waveView: s.waveView,
     gridEnabled: s.gridEnabled,
     loudnessLane: s.loudnessLane,
+    tempoLane: s.tempoLane,
     outSplit: s.outSplit,
     recentFiles: s.recentFiles,
     userPresets: s.userPresets,

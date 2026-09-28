@@ -956,3 +956,11 @@
   .toast, .dialog, .dropveil, .dropcard { animation: none; }
   .loadbar span { animation-duration: 3s; }
 }
+
+/* Tempo drift chart in the diagnosis sheet */
+.driftchart { display: block; width: 100%; height: auto; background: var(--surface-inset); border: 1px solid var(--border-hairline); }
+.driftchart .drift-zone { fill: var(--warn-500); opacity: 0.14; }
+.driftchart .drift-ref { stroke: var(--text-spec); stroke-width: 1; stroke-dasharray: 3 3; }
+.driftchart .drift-curve { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-linejoin: round; }
+.driftchart .drift-curve.hot { stroke: var(--warn-500); stroke-width: 1.8; }
+.driftchart .drift-label { font: 9px 'IBM Plex Mono', monospace; fill: var(--text-spec); letter-spacing: 0.04em; }

@@ -165,8 +165,9 @@ to type an exact value, and hover one to learn what it does.
 
 The waveform is a workspace too: wheel-zoom to transient level, drag the fade
 handles (four curve shapes), overlay the bar and beat **GRID** with a
-**CLICK** metronome, and flip to a log-frequency **spectrogram** that shares
-the same zoom, grid, playhead and loudness lane.
+**CLICK** metronome (both follow the beats when a track drifts), and flip to
+a log-frequency **spectrogram** that shares the same zoom, grid, playhead
+and loudness lane.
 
 <p align="center">
   <img src="docs/screenshots/02-spectrogram.png" alt="The spectrogram view, zoomed in on the first drop" width="880"/>
@@ -183,8 +184,15 @@ the same zoom, grid, playhead and loudness lane.
 Every load runs a full analysis pass:
 
 - **Tempo detection:** spectral-flux onsets and autocorrelation, phase-locked
-  to kick and bass. It drives the bar and beat **GRID** and the **CLICK**
-  metronome (mixed in after metering and never exported).
+  to kick and bass, then beats tracked through the whole song. It drives the
+  bar and beat **GRID** and the **CLICK** metronome (mixed in after metering
+  and never exported).
+- **Tempo drift:** generated tracks often speed up or slow down as they
+  play, so the tempo is measured through the song, not once. A drifting
+  track is flagged with where the drift starts, how far it goes and how far
+  a fixed grid slides off the beat; a **BPM** lane on the waveform shades
+  exactly the stretch that drifts, and the GRID and CLICK follow the real
+  beats instead of a grid that would slide off them.
 - **Section detection:** checkerboard novelty over band energies finds the
   boundaries, snaps them to bars (which also anchors bar 1 to the music), and
   labels each section by energy: INTRO, LOW, MID, PEAK, OUTRO.
@@ -203,7 +211,8 @@ Every load runs a full analysis pass:
   curve is applied in one click.
 
 <p align="center">
-  <img src="docs/screenshots/04-diagnosis.png" alt="The track diagnosis sheet with source dynamics and platform delivery" width="880"/>
+  <img src="docs/screenshots/04-diagnosis.png" alt="The track diagnosis sheet flagging tempo drift on an extended take, with its drift chart" width="880"/>
+  <br/><sub>An extended take that runs away: steady at 110.0 BPM, then drifting from 0:17, flagged and charted.</sub>
 </p>
 
 <a id="ship"></a>
@@ -300,7 +309,9 @@ scriptable hook (`window.__jmaster`) that drives the real app:
 | FLAC is lossless | 0 errors across full decode round trips (LPC and M/S frames included) |
 | ALSO SAVE is one render | a WAV and a FLAC from one export differ in 0 samples; all three files −11.12 LUFS on a −11.0 target |
 | Opus loudness survives the codec | −11.63 LUFS decoded against a −11.5 target |
-| BPM detection | 100.24 on a 100.00 BPM test track; 110.18 on the 110.00 BPM demo track |
+| BPM detection | 100.05 on a 100.00 BPM test track; 110.01 on the 110.00 BPM demo track; the grid lands within 11 ms of every true beat |
+| Tempo drift detection | a +4% ramp, a +2.5% step and a ±1.2% wobble each flagged where it happens; steady tracks measure within ±0.03 BPM and are never flagged |
+| CLICK follows a drifting track | every click within 1 sample of its tracked beat, accented on the bar |
 | Section detection | demo track boundaries at 17.5, 34.9, 52.4 and 69.8 s; its bar lines fall at 17.45, 34.91, 52.36 and 69.82 s |
 | CD image frame alignment | track 2 INDEX at exactly 00:34:00 for a 32 s track plus a 2 s gap |
 | Balance correction | +2.03 dB measured on a +2.02 dB expected shift |
