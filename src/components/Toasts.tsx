@@ -9,7 +9,7 @@ export function Toasts() {
     <div className="toasts" role="status" aria-live="polite">
       {toasts.slice(-3).map((t) => (
         <button key={t.id} className="toast" onClick={() => dismiss(t.id)}>
-          <span className={`lamp ${t.kind === 'run' ? 'run' : t.kind === 'fault' ? 'fault' : 'signal'}`} />
+          <span className={`lamp ${t.kind === 'info' ? 'signal' : t.kind}`} />
           {t.text}
         </button>
       ))}

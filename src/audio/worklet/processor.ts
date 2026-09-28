@@ -39,6 +39,9 @@ class JMasterProcessor extends AudioWorkletProcessor {
   private clickAccent: Float32Array;
   private clickActive: Float32Array | null = null;
   private clickIdx = 0;
+  // A drifting track's tracked beats (sample positions); null = fixed grid.
+  private clickBeats: Float64Array | null = null;
+  private clickDownbeat = 0;
 
   constructor() {
     super();
@@ -64,8 +67,15 @@ class JMasterProcessor extends AudioWorkletProcessor {
         this.playing = false;
         this.loopStart = -1;
         this.loopEnd = -1;
+        this.clickBeats = null;
         this.chain.reset();
         this.meter.reset();
+        break;
+      case 'beats':
+        this.clickBeats = msg.beats && msg.beats.length > 0
+          ? Float64Array.from(msg.beats as number[], (s) => s * sampleRate)
+          : null;
+        this.clickDownbeat = msg.downbeat ?? 0;
         break;
       case 'loop':
         if (msg.start === null || msg.end === null) {
@@ -214,6 +224,29 @@ class JMasterProcessor extends AudioWorkletProcessor {
     const p = this.params;
     if (!p.metronome || !p.gridBpm || p.gridBpm <= 0) {
       this.clickActive = null;
+      return;
+    }
+    const beats = this.clickBeats;
+    if (beats) {
+      // First tracked beat at or after this block.
+      let lo = 0, hi = beats.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (beats[mid] < blockStart) lo = mid + 1; else hi = mid;
+      }
+      let k = lo;
+      for (let i = 0; i < n; i++) {
+        if (k < beats.length && blockStart + i >= beats[k]) {
+          this.clickActive = (((k - this.clickDownbeat) % 4) + 4) % 4 === 0 ? this.clickAccent : this.clickBeat;
+          this.clickIdx = 0;
+          k++;
+        }
+        if (this.clickActive && this.clickIdx < this.clickActive.length) {
+          const c = this.clickActive[this.clickIdx++];
+          outL[i] += c;
+          outR[i] += c;
+        }
+      }
       return;
     }
     const period = (sampleRate * 60) / p.gridBpm;

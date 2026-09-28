@@ -4,12 +4,47 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import { engine } from '../audio/engine';
+import type { TempoCurve } from '../audio/engine';
 import { fadeGainAt } from '../audio/dsp/fades';
 import { palette } from '../lib/palette';
 
 const RULER_H = 20;
 const OVERVIEW_H = 11;
 const HANDLE = 9;
+
+/** First index whose value is at or after `t`. */
+function lowerBound(a: number[], t: number): number {
+  let lo = 0, hi = a.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (a[mid] < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+// Tempo curves with their pulse-less gaps bridged, per analysis.
+const bridgedCurves = new WeakMap<TempoCurve, number[]>();
+
+/** Local tempo at `sec`, bridged across gaps and held at the ends. */
+function curveAt(c: TempoCurve, sec: number): number {
+  let v = bridgedCurves.get(c);
+  if (!v) {
+    const known = c.bpm.map((b, i) => [i, b] as const).filter(([, b]) => Number.isFinite(b));
+    v = c.bpm.map((b, i) => {
+      if (Number.isFinite(b) || known.length === 0) return b;
+      const after = known.findIndex(([j]) => j > i);
+      if (after <= 0) return known[after === 0 ? 0 : known.length - 1][1];
+      const [i0, b0] = known[after - 1];
+      const [i1, b1] = known[after];
+      return b0 + ((b1 - b0) * (i - i0)) / (i1 - i0);
+    });
+    bridgedCurves.set(c, v);
+  }
+  const x = Math.max(0, Math.min(v.length - 1, (sec - c.startSec) / c.stepSec));
+  const i = Math.floor(x);
+  const j = Math.min(v.length - 1, i + 1);
+  return v[i] + (v[j] - v[i]) * (x - i);
+}
 
 type DragMode = 'seek' | 'fadeIn' | 'fadeOut' | 'view' | null;
 
@@ -74,6 +109,10 @@ export function Waveform() {
   const hasTempo = useStore((s) => s.tempo !== null);
   const loudnessLane = useStore((s) => s.loudnessLane);
   const setLoudnessLane = useStore((s) => s.setLoudnessLane);
+  const tempoLane = useStore((s) => s.tempoLane);
+  const setTempoLane = useStore((s) => s.setTempoLane);
+  const drifting = useStore((s) => !!s.tempo?.drift);
+  const waveFocusSeq = useStore((s) => s.waveFocus?.seq ?? 0);
   const processedView = useStore((s) => s.processedView);
   const setProcessedView = useStore((s) => s.setProcessedView);
   const outSplit = useStore((s) => s.outSplit);
@@ -132,6 +171,12 @@ export function Waveform() {
     clampView(anchorSec - newLen * anchorFrac, anchorSec + newLen * (1 - anchorFrac));
   };
 
+  // Frame a stretch another part of the app points at (the drift panel).
+  useEffect(() => {
+    const f = useStore.getState().waveFocus;
+    if (f && waveFocusSeq > 0) clampView(f.startSec, f.endSec);
+  }, [waveFocusSeq]);
+
   // ── drawing ─────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -167,7 +212,7 @@ export function Waveform() {
       const v0 = view.current;
       const curSig: unknown[] = [
         st.playheadSec, st.playing, v0.start, v0.end, hoverX.current, dragMode.current,
-        st.waveView, st.gridEnabled, st.loudnessLane, st.processedView, st.outSplit,
+        st.waveView, st.gridEnabled, st.loudnessLane, st.tempoLane, st.processedView, st.outSplit,
         st.loopStartSec, st.loopEndSec, st.fadeInSec, st.fadeOutSec,
         st.fadeInCurve, st.fadeOutCurve, st.targetLufs, st.tempo,
         engine.processedPreview, engine.loudnessLane, specCanvas.current,
@@ -295,11 +340,39 @@ export function Waveform() {
         }
       }
 
-      // bar/beat grid from the detected tempo, anchored to the first bar
-      if (st.gridEnabled && st.tempo && st.tempo.bpm > 0) {
-        const beatSec = 60 / st.tempo.bpm;
+      // bar/beat grid: a drifting track's comes from its tracked beats, a
+      // steady track's is one fixed grid anchored to the first bar
+      const tp = st.tempo;
+      if (st.gridEnabled && tp && tp.bpm > 0 && tp.drift && tp.beats.length > 1) {
+        const beats = tp.beats;
+        const barPx = ((240 / tp.bpm) / viewLen) * w;
+        if (barPx > 7) {
+          ctx.font = `8px 'IBM Plex Mono', monospace`;
+          ctx.textBaseline = 'top';
+          for (let i = Math.max(0, lowerBound(beats, v.start) - 1); i < beats.length; i++) {
+            const sec = beats[i];
+            if (sec > v.end) break;
+            const x = secToX(sec);
+            if (x < -1) continue;
+            const pos = (((i - tp.downbeat) % 4) + 4) % 4;
+            if (pos === 0) {
+              ctx.fillStyle = specMode ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.14)';
+              ctx.fillRect(x, topY, 1, waveH);
+              const bar = Math.floor((i - tp.downbeat) / 4) + 1;
+              if (barPx > 44 && bar >= 1) {
+                ctx.fillStyle = specMode ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.3)';
+                ctx.fillText(`${bar}`, x + 3, topY + waveH - 10);
+              }
+            } else if (barPx > 72) {
+              ctx.fillStyle = specMode ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.07)';
+              ctx.fillRect(x, topY, 1, waveH);
+            }
+          }
+        }
+      } else if (st.gridEnabled && tp && tp.bpm > 0) {
+        const beatSec = 60 / tp.bpm;
         const barSec = beatSec * 4;
-        const anchor = st.tempo.firstBarSec ?? st.tempo.firstBeatSec;
+        const anchor = tp.firstBarSec ?? tp.firstBeatSec;
         const barPx = (barSec / viewLen) * w;
         if (barPx > 7) {
           const firstVisibleBar = Math.max(0, Math.floor((v.start - anchor) / barSec));
@@ -398,6 +471,67 @@ export function Waveform() {
         ctx.font = `7px 'IBM Plex Mono', monospace`;
         ctx.textBaseline = 'top';
         ctx.fillText(ppLane ? 'ST LUFS · SRC ▬ OUT —' : 'ST LUFS · SRC', 3, laneY + 2);
+      }
+
+      // tempo lane: where the tempo drifts, against the tempo it set out at
+      const dr = tp?.drift;
+      if (st.tempoLane && tp && dr && tp.curve) {
+        const cv = tp.curve;
+        const laneH = Math.min(40, waveH * 0.28);
+        const lufsH = st.loudnessLane && engine.loudnessLane ? Math.min(30, waveH * 0.22) + 1 : 0;
+        const laneY = topY + waveH - lufsH - laneH;
+        ctx.fillStyle = 'rgba(0,0,0,0.30)';
+        ctx.fillRect(0, laneY, w, laneH);
+        const vals = cv.bpm.filter(Number.isFinite);
+        const lo = Math.min(dr.refBpm, ...vals);
+        const hi = Math.max(dr.refBpm, ...vals);
+        const span = Math.max(0.5, hi - lo);
+        const bpmToY = (b: number) => laneY + 12 + (1 - (b - lo) / span) * (laneH - 16);
+        const laneLabel = `BPM · ${dr.refBpm.toFixed(1)} → ${dr.endBpm.toFixed(1)}`;
+        ctx.font = `7px 'IBM Plex Mono', monospace`;
+        ctx.textBaseline = 'top';
+        const labelEnd = 3 + ctx.measureText(laneLabel).width;
+        // drift regions: an amber wash, tagged where each begins
+        for (const r of dr.regions) {
+          const x0 = Math.max(0, secToX(r.startSec));
+          const x1 = Math.min(w, secToX(r.endSec));
+          if (x1 <= 0 || x0 >= w) continue;
+          ctx.fillStyle = pal.warn;
+          ctx.globalAlpha = 0.16;
+          ctx.fillRect(x0, laneY, x1 - x0, laneH);
+          ctx.globalAlpha = 0.9;
+          if (secToX(r.startSec) >= 0) ctx.fillRect(x0, laneY, 1, laneH);
+          const delta = r.peakBpm - dr.refBpm;
+          const tag = `DRIFT ${delta >= 0 ? '+' : '−'}${Math.abs(delta).toFixed(1)} BPM`;
+          const tx = Math.max(x0 + 4, labelEnd + 10);
+          if (x1 - tx > ctx.measureText(tag).width + 4) ctx.fillText(tag, tx, laneY + 2);
+          ctx.globalAlpha = 1;
+        }
+        // the tempo the track set out at
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(0, Math.round(bpmToY(dr.refBpm)), w, 1);
+        // the curve: grey where steady, amber inside the drift
+        const trace = () => {
+          ctx.beginPath();
+          for (let x = 0; x <= w; x += 2) {
+            const y = bpmToY(curveAt(cv, v.start + (x / w) * viewLen));
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        };
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = colSpec;
+        trace();
+        ctx.save();
+        ctx.beginPath();
+        for (const r of dr.regions) ctx.rect(secToX(r.startSec), laneY, secToX(r.endSec) - secToX(r.startSec), laneH);
+        ctx.clip();
+        ctx.strokeStyle = pal.warn;
+        ctx.lineWidth = 1.6;
+        trace();
+        ctx.restore();
+        ctx.fillStyle = colSpec;
+        ctx.fillText(laneLabel, 3, laneY + 2);
       }
 
       // processed-master lane (OUT): ghosted over the source, or in its own
@@ -517,6 +651,7 @@ export function Waveform() {
           const lv = hLane.values[idx];
           if (lv > -60) text += ` · ${lv.toFixed(1)} LUFS`;
         }
+        if (st.tempo?.drift && st.tempo.curve) text += ` · ${curveAt(st.tempo.curve, sec).toFixed(1)} BPM`;
         ctx.font = `9px 'IBM Plex Mono', monospace`;
         ctx.textBaseline = 'top';
         const tw = ctx.measureText(text).width;
@@ -570,8 +705,18 @@ export function Waveform() {
         ctx.fillRect(0, OVERVIEW_H + 1, w, 1);
       }
 
-      // time ruler over the current view
+      // time ruler over the current view, banded amber where the tempo drifts
       const rulerY = h - RULER_H;
+      if (st.tempo?.drift) {
+        ctx.fillStyle = pal.warn;
+        ctx.globalAlpha = 0.22;
+        for (const r of st.tempo.drift.regions) {
+          const x0 = Math.max(0, secToX(r.startSec));
+          const x1 = Math.min(w, secToX(r.endSec));
+          if (x1 > x0) ctx.fillRect(x0, rulerY + 1, x1 - x0, RULER_H - 1);
+        }
+        ctx.globalAlpha = 1;
+      }
       ctx.fillStyle = colHair;
       ctx.fillRect(0, rulerY, w, 1);
       ctx.fillStyle = colSpec;
@@ -743,6 +888,11 @@ export function Waveform() {
             <button className={loudnessLane ? 'on' : ''}
               title="Short-term loudness lane"
               onClick={() => setLoudnessLane(!loudnessLane)}>LUFS</button>
+            {drifting && (
+              <button className={tempoLane ? 'on' : ''}
+                title="Tempo lane: where the tempo drifts from the tempo the track set out at"
+                onClick={() => setTempoLane(!tempoLane)}>BPM</button>
+            )}
           </span>
           <span className="wseg">
             <button className={processedView ? 'on' : ''}

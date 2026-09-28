@@ -3,6 +3,9 @@
 // offline render workers. All UI actions route through here.
 import { ChainParams, NOMINAL_LUFS } from './dsp/params';
 import type { EncodeOptions } from './encode';
+import type { SongSection, TempoCurve, TempoDrift } from './analysis/tempo';
+
+export type { SongSection, TempoCurve, TempoDrift, DriftRegion } from './analysis/tempo';
 
 export interface MeterFrame {
   playhead: number;
@@ -47,18 +50,19 @@ export interface SourceDiagnostics {
   corrWorst: number;
 }
 
-export interface SongSection {
-  startSec: number;
-  endSec: number;
-  label: string;
-}
-
 export interface TempoInfo {
   bpm: number;
   firstBeatSec: number;
   firstBarSec: number;
   confidence: number;
   sections: SongSection[];
+  /** Local tempo over time; null when the track is too short to measure. */
+  curve: TempoCurve | null;
+  /** Beat times tracked through the music (s); `downbeat` indexes a bar line. */
+  beats: number[];
+  downbeat: number;
+  /** Set when the tempo drifts; the grid and CLICK then follow `beats`. */
+  drift: TempoDrift | null;
 }
 
 export interface WaveformLevel {
@@ -432,6 +436,14 @@ export class AudioEngine {
     this.node?.port.postMessage({ type: 'seek', sample: sec * TARGET_RATE });
   }
 
+  /**
+   * The beats a drifting track's CLICK follows (seconds), with the index of
+   * a downbeat for the accent; null returns the CLICK to the fixed grid.
+   */
+  setClickBeats(beats: number[] | null, downbeat: number): void {
+    this.node?.port.postMessage({ type: 'beats', beats, downbeat });
+  }
+
   /** Loops playback over [startSec, endSec); null clears the loop. */
   setLoop(startSec: number | null, endSec: number | null): void {
     this.node?.port.postMessage(
@@ -514,6 +526,10 @@ export class AudioEngine {
               firstBarSec: d.firstBarSec ?? d.firstBeatSec,
               confidence: d.confidence,
               sections: d.sections ?? [],
+              curve: d.curve ?? null,
+              beats: d.beats ?? [],
+              downbeat: d.downbeat ?? 0,
+              drift: d.drift ?? null,
             }
           : null;
         if (gen !== this.gen) { resolve(null); return; }

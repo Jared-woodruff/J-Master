@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+- **Tempo drift detection.** Generated tracks often speed up or slow down
+  as they play. Every load now measures the tempo through the song, and a
+  track that drifts is flagged: the track strip shows its range in amber
+  (for example 138.0 → 145.9 BPM), the check sheet adds TEMPO STABILITY
+  with a drift chart, where the drift begins, how far it goes and how far
+  a fixed grid slides off the beat, and a BPM lane on the waveform, with
+  an amber band on the time ruler, shades exactly the part of the song that
+  drifts. SHOW ON WAVEFORM frames it, and hovering reads the local tempo.
+- A drifting track's GRID and CLICK follow its tracked beats instead of a
+  fixed grid that would slide off them.
+- Tighter grids for steady tracks too: the BPM and grid now come from beats
+  tracked through the whole song, reading 110.01 on a 110.00 BPM track
+  (was 110.18) and landing within 11 ms of every beat (was up to 87 ms off
+  by the end).
+- Fix: a drifting track with a dotted rhythm could have its tempo read 4/3
+  too fast. Short windows now vote on the tempo before the whole track is
+  read.
+
 ## 2.5.0
 - **Fix: dropping a track onto the open screen made the UI flash until
   restart.** One drop was handled twice, loading the track in parallel and

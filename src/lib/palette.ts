@@ -10,6 +10,7 @@ export interface CanvasPalette {
   hair: string;
   spec: string;
   src: string;
+  warn: string;
 }
 
 let cached: CanvasPalette | null = null;
@@ -27,6 +28,7 @@ export function palette(): CanvasPalette {
       hair: s.getPropertyValue('--border-hairline').trim() || '#26292E',
       spec: s.getPropertyValue('--graphite-400').trim() || '#878D93',
       src: s.getPropertyValue('--graphite-300').trim() || '#AFB3B8',
+      warn: s.getPropertyValue('--warn-500').trim() || '#E8A200',
     };
     cachedTheme = theme;
   }

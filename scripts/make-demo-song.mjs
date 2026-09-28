@@ -7,7 +7,10 @@
 // This is not the test fixture. scripts/make-test-song.mjs stays the track
 // the verification numbers in the README were measured on.
 //
-// Usage: node scripts/make-demo-song.mjs [out.wav]
+// --drift speeds the finished cue up after 0:20 (4.5% by the end, like a
+// generated extension running away), for showing drift detection.
+//
+// Usage: node scripts/make-demo-song.mjs [out.wav] [--drift]
 import { writeFileSync } from 'node:fs';
 
 const SR = 44100;
@@ -301,21 +304,39 @@ crash(DROP2 * BAR);
   }
 }
 
+// Optional drift: variable-speed playback, steady to 0:20 and then speeding
+// up evenly to +4.5% at the end (tempo and pitch move together).
+let outL = L, outR = R;
+const drift = process.argv.includes('--drift');
+if (drift) {
+  const HOLD = 20 * SR;
+  const rate = (x) => (x < HOLD ? 1 : 1 + (0.045 * (x - HOLD)) / (N - HOLD));
+  const l = [], r = [];
+  for (let x = 0; x + 1 < N; x += rate(x)) {
+    const j = Math.floor(x), u = x - j;
+    l.push(L[j] + (L[j + 1] - L[j]) * u);
+    r.push(R[j] + (R[j + 1] - R[j]) * u);
+  }
+  outL = Float64Array.from(l);
+  outR = Float64Array.from(r);
+}
+const M = outL.length;
+
 // Normalize to -1 dBFS sample peak and write 16-bit PCM.
 let peak = 0;
-for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]));
+for (let i = 0; i < M; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
 const norm = 10 ** (-1 / 20) / peak;
-const buf = Buffer.alloc(44 + N * 4);
-buf.write('RIFF', 0); buf.writeUInt32LE(36 + N * 4, 4); buf.write('WAVE', 8);
+const buf = Buffer.alloc(44 + M * 4);
+buf.write('RIFF', 0); buf.writeUInt32LE(36 + M * 4, 4); buf.write('WAVE', 8);
 buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
 buf.writeUInt16LE(2, 22); buf.writeUInt32LE(SR, 24); buf.writeUInt32LE(SR * 4, 28);
 buf.writeUInt16LE(4, 32); buf.writeUInt16LE(16, 34);
-buf.write('data', 36); buf.writeUInt32LE(N * 4, 40);
+buf.write('data', 36); buf.writeUInt32LE(M * 4, 40);
 let off = 44;
-for (let i = 0; i < N; i++) {
-  buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(L[i] * norm * 32767))), off); off += 2;
-  buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(R[i] * norm * 32767))), off); off += 2;
+for (let i = 0; i < M; i++) {
+  buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(outL[i] * norm * 32767))), off); off += 2;
+  buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(outR[i] * norm * 32767))), off); off += 2;
 }
-const out = process.argv[2] ?? 'midnight-static.wav';
+const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'midnight-static.wav';
 writeFileSync(out, buf);
-console.log(`wrote ${out}: ${DUR.toFixed(1)} s stereo 44.1k/16 at ${BPM} BPM`);
+console.log(`wrote ${out}: ${(M / SR).toFixed(1)} s stereo 44.1k/16 at ${BPM} BPM${drift ? ', drifting to +4.5% from 0:20' : ''}`);
