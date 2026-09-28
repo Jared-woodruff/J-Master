@@ -18,6 +18,8 @@
 - Fix: a drifting track with a dotted rhythm could have its tempo read 4/3
   too fast. Short windows now vote on the tempo before the whole track is
   read.
+- Fix: with LOOP on, the CLICK could drop the loop's first beat at every
+  wrap (or accent the wrong one). Clicks now follow the looped audio.
 
 ## 2.5.0
 - **Fix: dropping a track onto the open screen made the UI flash until

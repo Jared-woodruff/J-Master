@@ -13,6 +13,7 @@ declare class AudioWorkletProcessor {
 }
 
 const METER_INTERVAL = 1024; // samples between meter frames (~21 ms @ 48k)
+const MAX_SPANS = 8;
 
 class JMasterProcessor extends AudioWorkletProcessor {
   private chain = new MasterChain(sampleRate, 128);
@@ -42,6 +43,10 @@ class JMasterProcessor extends AudioWorkletProcessor {
   // A drifting track's tracked beats (sample positions); null = fixed grid.
   private clickBeats: Float64Array | null = null;
   private clickDownbeat = 0;
+  // Source runs behind the current block, as [output offset, source start,
+  // length] triples: more than one when a loop wraps mid-block.
+  private spans = new Int32Array(3 * MAX_SPANS);
+  private spanCount = 0;
 
   constructor() {
     super();
@@ -140,6 +145,7 @@ class JMasterProcessor extends AudioWorkletProcessor {
     const loopOn = this.loopStart >= 0 && this.loopEnd > this.loopStart;
     let pos = start;
     let written = 0;
+    this.spanCount = 0;
     while (written < n) {
       const limit = loopOn && pos < this.loopEnd ? this.loopEnd : total;
       const chunk = Math.min(n - written, limit - pos);
@@ -147,6 +153,12 @@ class JMasterProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < chunk; i++) {
         outL[written + i] = srcL[pos + i];
         outR[written + i] = srcR[pos + i];
+      }
+      if (this.spanCount < MAX_SPANS) {
+        const s = 3 * this.spanCount++;
+        this.spans[s] = written;
+        this.spans[s + 1] = pos;
+        this.spans[s + 2] = chunk;
       }
       written += chunk;
       pos += chunk;
@@ -214,60 +226,64 @@ class JMasterProcessor extends AudioWorkletProcessor {
     }
 
     // Metronome: mixed in after every meter tap so readings stay honest.
-    this.mixClick(outL, outR, n, start);
+    this.mixClick(outL, outR, n);
 
     this.tickMeterClock(n, false);
     return true;
   }
 
-  private mixClick(outL: Float32Array, outR: Float32Array, n: number, blockStart: number): void {
+  /**
+   * Clicks are placed on source positions, run by run, so when a loop wraps
+   * mid-block the loop's first beat still clicks, with its own accent. A
+   * drifting track clicks on its tracked beats; others on the fixed grid.
+   */
+  private mixClick(outL: Float32Array, outR: Float32Array, n: number): void {
     const p = this.params;
     if (!p.metronome || !p.gridBpm || p.gridBpm <= 0) {
       this.clickActive = null;
       return;
     }
     const beats = this.clickBeats;
-    if (beats) {
-      // First tracked beat at or after this block.
-      let lo = 0, hi = beats.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (beats[mid] < blockStart) lo = mid + 1; else hi = mid;
-      }
-      let k = lo;
-      for (let i = 0; i < n; i++) {
-        if (k < beats.length && blockStart + i >= beats[k]) {
-          this.clickActive = (((k - this.clickDownbeat) % 4) + 4) % 4 === 0 ? this.clickAccent : this.clickBeat;
-          this.clickIdx = 0;
-          k++;
-        }
-        if (this.clickActive && this.clickIdx < this.clickActive.length) {
-          const c = this.clickActive[this.clickIdx++];
-          outL[i] += c;
-          outR[i] += c;
-        }
-      }
-      return;
-    }
     const period = (sampleRate * 60) / p.gridBpm;
     const firstBeat = p.gridFirstBeatSec * sampleRate;
-    // Beats whose start falls inside this block.
-    let k = Math.ceil((blockStart - firstBeat) / period);
-    if (k < 0) k = 0;
-    let nextBeat = firstBeat + k * period;
-    for (let i = 0; i < n; i++) {
-      const pos = blockStart + i;
-      if (pos >= nextBeat) {
-        this.clickActive = k % 4 === 0 ? this.clickAccent : this.clickBeat;
-        this.clickIdx = 0;
-        k++;
-        nextBeat = firstBeat + k * period;
+    let i = 0;
+    for (let s = 0; s < this.spanCount; s++) {
+      const off = this.spans[3 * s];
+      const src = this.spans[3 * s + 1];
+      const end = off + this.spans[3 * s + 2];
+      // First beat at or after this run's first source sample.
+      let k: number;
+      if (beats) {
+        let lo = 0, hi = beats.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (beats[mid] < src) lo = mid + 1; else hi = mid;
+        }
+        k = lo;
+      } else {
+        k = Math.max(0, Math.ceil((src - firstBeat) / period));
       }
-      if (this.clickActive && this.clickIdx < this.clickActive.length) {
-        const c = this.clickActive[this.clickIdx++];
-        outL[i] += c;
-        outR[i] += c;
+      let next = beats ? (k < beats.length ? beats[k] : Infinity) : firstBeat + k * period;
+      for (; i < end; i++) {
+        if (src + (i - off) >= next) {
+          const bar = beats ? k - this.clickDownbeat : k;
+          this.clickActive = ((bar % 4) + 4) % 4 === 0 ? this.clickAccent : this.clickBeat;
+          this.clickIdx = 0;
+          k++;
+          next = beats ? (k < beats.length ? beats[k] : Infinity) : firstBeat + k * period;
+        }
+        this.clickTail(outL, outR, i);
       }
+    }
+    // Past the end of the track: let a sounding click finish.
+    for (; i < n; i++) this.clickTail(outL, outR, i);
+  }
+
+  private clickTail(outL: Float32Array, outR: Float32Array, i: number): void {
+    if (this.clickActive && this.clickIdx < this.clickActive.length) {
+      const c = this.clickActive[this.clickIdx++];
+      outL[i] += c;
+      outR[i] += c;
     }
   }
 
