@@ -6,15 +6,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../state/store';
 import { engine } from '../audio/engine';
-import { planRepair } from '../audio/analysis/repair';
+import { planRepair, REPAIR_MAX_STRETCH } from '../audio/analysis/repair';
 import { bpmText, mmss } from '../lib/tempo-text';
 import { useSheetFocus } from '../lib/use-sheet-focus';
 
 type Choice = 'start' | 'average' | 'custom';
 
-/** Past this much stretch anywhere in the song, the repair is refused. */
-const MAX_STRETCH = 0.25;
-/** Past this much, it runs but asks for a careful listen. */
+/** Past this much, it runs but asks for a careful listen (past REPAIR_MAX_STRETCH it is refused). */
 const WARN_STRETCH = 0.1;
 
 /** A tempo a grid would be set to: the whole number when it's that close, else a tenth. */
@@ -33,6 +31,7 @@ export function RepairDialog() {
   const tempo = useStore((s) => s.tempo);
   const repair = useStore((s) => s.driftRepair);
   const repairing = useStore((s) => s.repairing);
+  const loading = useStore((s) => s.loading);
   const openRepair = useStore((s) => s.openRepair);
   const repairDrift = useStore((s) => s.repairDrift);
   const cancelRepair = useStore((s) => s.cancelRepair);
@@ -72,7 +71,7 @@ export function RepairDialog() {
 
   const busy = repairing !== null;
   const worst = plan ? Math.max(plan.maxStretch, -plan.minStretch) : 0;
-  const tooFar = worst > MAX_STRETCH;
+  const tooFar = worst > REPAIR_MAX_STRETCH;
   const same = repair !== null && Math.abs(repair.targetBpm - target) < 0.005;
   const outSec = plan ? plan.outLength / engine.sampleRate : 0;
   const delta = base ? outSec - base.durationSec : 0;
@@ -150,7 +149,7 @@ export function RepairDialog() {
 
             <div className="spec" style={{ lineHeight: 1.5, whiteSpace: 'normal' }}>
               {!inRange ? 'PICK A TEMPO FROM 40 TO 300 BPM.'
-                : tooFar ? `THAT TEMPO IS MORE THAN ${pct(MAX_STRETCH)} FROM THE SONG'S. PICK ONE CLOSER.`
+                : tooFar ? `THAT TEMPO IS MORE THAN ${pct(REPAIR_MAX_STRETCH)} FROM THE SONG'S. PICK ONE CLOSER.`
                 : worst > WARN_STRETCH ? 'A LARGE STRETCH: LISTEN CLOSELY TO THE ATTACKS AND THE BASS AFTERWARDS.'
                 : 'THE REPAIR PLAYS, MASTERS AND EXPORTS IN PLACE OF THE FILE. THE FILE ON DISK IS NOT TOUCHED: REVERT, OR SAVE THE REPAIR AS A WAV, FROM DIAG.'}
             </div>
@@ -175,7 +174,7 @@ export function RepairDialog() {
           ) : (
             <>
               <button className="btn btn-secondary" onClick={() => openRepair(false)}>CANCEL</button>
-              <button className="btn btn-accent" disabled={!plan || tooFar || same}
+              <button className="btn btn-accent" disabled={!plan || tooFar || same || loading}
                 onClick={() => void repairDrift(target)}>
                 {same ? 'REPAIRED AT THIS TEMPO' : repair ? 'REPAIR AGAIN →' : 'REPAIR →'}
               </button>

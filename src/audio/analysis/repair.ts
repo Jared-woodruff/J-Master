@@ -17,9 +17,10 @@
 // their attack. The rotations are computed once from both channels
 // together and applied to both, so the stereo image stays exactly where it
 // was. No single frame length suits a whole mix (bass partials a few hertz
-// apart need long frames, drum attacks short ones), so the track is split
-// into two bands, each stretched with its own. Where the warp runs at unity
-// the output equals the input.
+// apart need long frames, drum attacks short ones), so the track is heard
+// in two bands, each through its own frame length, but with phases from
+// one field across both, so the bands add back coherently where they
+// meet. Where the warp runs at unity the output equals the input.
 import { FftPlan } from '../dsp/fft';
 import { bridged, type TempoCurve } from './tempo';
 
@@ -115,162 +116,90 @@ export function planRepair(curve: TempoCurve, targetBpm: number, fs: number, sou
   return { targetBpm, warp, outLength, beats: Math.round(beats), maxStretch, minStretch };
 }
 
-export interface StretchOptions {
-  /** FFT size (a power of two). */
-  n?: number;
-  /** Synthesis hop, samples. */
-  hop?: number;
-  /** The band (Hz) the input carries; phase work is spent there only. */
-  band?: [number, number];
-  fs?: number;
-  /** Buffers to add the output into (both outLength long); new ones by default. */
-  into?: { L: Float32Array; R: Float32Array };
-}
-
 /**
- * Plays a stereo signal along `warp`, pitch unchanged: a phase vocoder
- * whose phases come from phase gradient heap integration, with one set of
- * phase rotations for both channels. Both channels travel in one complex
+ * One STFT resolution: a periodic Hann window, the FFT, and both channels'
+ * spectra for this frame and the last. Both channels travel in one complex
  * FFT (L real, R imaginary).
  */
-export function stretchStereo(
-  L: Float32Array, R: Float32Array,
-  warp: (tau: number) => number, outLength: number,
-  onProgress?: (pct: number) => void,
-  { n = 4096, hop = 1024, band, fs = 48000, into }: StretchOptions = {},
-): { L: Float32Array; R: Float32Array } {
-  const N = n, Hs = hop, half = N / 2, K = half + 1;
-  const plan = new FftPlan(N);
-  const len = L.length;
-  const win = new Float64Array(N);
-  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((TWO_PI * i) / N);
-  // A periodic Hann, applied on analysis and synthesis, overlaps to 3N/8
-  // per hop; the inverse transform is N times too big.
-  const scale = Hs / ((3 / 8) * N) / N;
-  const kLo = band ? Math.max(0, Math.floor((band[0] * N) / fs)) : 0;
-  const kHi = band ? Math.min(half, Math.ceil((band[1] * N) / fs)) : half;
+class Stft {
+  readonly N: number;
+  readonly half: number;
+  readonly win: Float64Array;
+  private readonly plan: FftPlan;
+  private readonly re: Float64Array;
+  private readonly im: Float64Array;
+  lr: Float64Array; li: Float64Array; rr: Float64Array; ri: Float64Array;
+  private plr: Float64Array; private pli: Float64Array;
+  private prr: Float64Array; private pri: Float64Array;
 
-  const outL = into?.L ?? new Float32Array(outLength);
-  const outR = into?.R ?? new Float32Array(outLength);
-  const re = new Float64Array(N), im = new Float64Array(N);
-  const lr = new Float64Array(K), li = new Float64Array(K);       // left spectrum
-  const rr = new Float64Array(K), ri = new Float64Array(K);       // right spectrum
-  const pw = new Float64Array(K), prevPw = new Float64Array(K);   // |L|² + |R|²
-  const phi = new Float64Array(K), prevPhi = new Float64Array(K); // phase of L + R
-  const rot = new Float64Array(K), prevRot = new Float64Array(K);
-  const done = new Uint8Array(K);
+  constructor(N: number) {
+    this.N = N;
+    this.half = N / 2;
+    this.plan = new FftPlan(N);
+    this.win = new Float64Array(N);
+    for (let i = 0; i < N; i++) this.win[i] = 0.5 - 0.5 * Math.cos((TWO_PI * i) / N);
+    this.re = new Float64Array(N);
+    this.im = new Float64Array(N);
+    const K = this.half + 1;
+    this.lr = new Float64Array(K); this.li = new Float64Array(K);
+    this.rr = new Float64Array(K); this.ri = new Float64Array(K);
+    this.plr = new Float64Array(K); this.pli = new Float64Array(K);
+    this.prr = new Float64Array(K); this.pri = new Float64Array(K);
+  }
 
-  // A max-heap of bins keyed by power: bin k of the last frame is k, bin k
-  // of this frame is k + K.
-  const hKey = new Float64Array(2 * K), hVal = new Int32Array(2 * K);
-  let hn = 0;
-  const push = (key: number, val: number): void => {
-    let i = hn++;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (hKey[p] >= key) break;
-      hKey[i] = hKey[p]; hVal[i] = hVal[p]; i = p;
-    }
-    hKey[i] = key; hVal[i] = val;
-  };
-  const pop = (): number => {
-    const top = hVal[0];
-    const key = hKey[--hn], val = hVal[hn];
-    let i = 0;
-    for (;;) {
-      let c = 2 * i + 1;
-      if (c >= hn) break;
-      if (c + 1 < hn && hKey[c + 1] > hKey[c]) c++;
-      if (hKey[c] <= key) break;
-      hKey[i] = hKey[c]; hVal[i] = hVal[c]; i = c;
-    }
-    hKey[i] = key; hVal[i] = val;
-    return top;
-  };
-
-  let prevA = 0;
-  let first = true;
-  const frames = Math.ceil((outLength + half) / Hs) + 1;
-
-  for (let m = 0; m < frames; m++) {
-    const c = m * Hs;                          // output frame centre
-    const a = Math.round(warp(c));             // source frame centre
-    // Analysis: both channels in one transform.
+  /**
+   * Both channels' spectra around source sample `a` (silence outside the
+   * signal). With `sub`, the frame is of L − subL and R − subR.
+   */
+  analyze(L: Float32Array, R: Float32Array, a: number, subL?: Float32Array, subR?: Float32Array): void {
+    [this.plr, this.lr] = [this.lr, this.plr];
+    [this.pli, this.li] = [this.li, this.pli];
+    [this.prr, this.rr] = [this.rr, this.prr];
+    [this.pri, this.ri] = [this.ri, this.pri];
+    const { N, half, win, re, im } = this;
+    const len = L.length;
     for (let i = 0; i < N; i++) {
       const idx = a - half + i;
-      const inside = idx >= 0 && idx < len;
-      re[i] = inside ? L[idx] * win[i] : 0;
-      im[i] = inside ? R[idx] * win[i] : 0;
+      if (idx < 0 || idx >= len) { re[i] = 0; im[i] = 0; continue; }
+      re[i] = (subL ? L[idx] - subL[idx] : L[idx]) * win[i];
+      im[i] = (subR ? R[idx] - subR[idx] : R[idx]) * win[i];
     }
-    plan.forward(re, im);
-    let maxPw = 0;
+    this.plan.forward(re, im);
+    const { lr, li, rr, ri } = this;
     for (let k = 0; k <= half; k++) {
       const j = (N - k) % N;
       lr[k] = 0.5 * (re[k] + re[j]); li[k] = 0.5 * (im[k] - im[j]);
       rr[k] = 0.5 * (im[k] + im[j]); ri[k] = -0.5 * (re[k] - re[j]);
-      if (k < kLo || k > kHi) continue;
-      phi[k] = Math.atan2(li[k] + ri[k], lr[k] + rr[k]);
-      pw[k] = lr[k] * lr[k] + li[k] * li[k] + rr[k] * rr[k] + ri[k] * ri[k];
-      if (pw[k] > maxPw) maxPw = pw[k];
     }
-    const hopA = a - prevA;
+  }
 
-    if (first) {
-      rot.fill(0);
-    } else {
-      // Bins are visited loudest first, across this frame and the last. A
-      // peak that was loud in the last frame carries on in time, its phase
-      // moving at its own true frequency; a bin loud in this frame hands
-      // its rotation to its quieter neighbours. Partials stay locked to
-      // their peaks, and a transient, loud only now, spreads one rotation
-      // over all its bins and keeps its shape.
-      const floor = maxPw * 1e-10;
-      let todo = 0;
-      for (let k = kLo; k <= kHi; k++) {
-        if (pw[k] > floor) { done[k] = 0; todo++; } else done[k] = 2;
-      }
-      hn = 0;
-      for (let k = kLo; k <= kHi; k++) push(prevPw[k], k);
-      while (todo > 0 && hn > 0) {
-        const v = pop();
-        if (v < K) {
-          // Only a peak carries on in time: a bin between two close
-          // partials holds a mixture whose phase advance means nothing.
-          if (done[v] !== 0) continue;
-          if ((v > kLo && pw[v - 1] > pw[v]) || (v < kHi && pw[v + 1] > pw[v])) continue;
-          const omega = (TWO_PI * v) / N;
-          let w = omega;
-          if (hopA > 0) {
-            let d = phi[v] - prevPhi[v] - omega * hopA;
-            d -= TWO_PI * Math.round(d / TWO_PI);
-            w = omega + d / hopA;
-          }
-          // Synthesis phase = the last synthesis phase + ω·Hs, kept as a
-          // rotation away from the analysis phase.
-          const r = prevPhi[v] + prevRot[v] + w * Hs - phi[v];
-          rot[v] = r - TWO_PI * Math.round(r / TWO_PI);
-          done[v] = 1; todo--;
-          push(pw[v], v + K);
-        } else {
-          const k = v - K;
-          if (k > kLo && done[k - 1] === 0) { rot[k - 1] = rot[k]; done[k - 1] = 1; todo--; push(pw[k - 1], k - 1 + K); }
-          if (k < kHi && done[k + 1] === 0) { rot[k + 1] = rot[k]; done[k + 1] = 1; todo--; push(pw[k + 1], k + 1 + K); }
-        }
-      }
-      // Bins under the floor turn with the nearest bin below them; outside
-      // the band there is nothing to turn.
-      for (let k = 0, last = 0; k <= half; k++) {
-        if (k < kLo || k > kHi) rot[k] = 0;
-        else if (done[k] === 1) last = rot[k];
-        else rot[k] = last;
-      }
-    }
-    rot[0] = 0;
-    rot[half] = 0;                             // DC and Nyquist stay real
-    first = false;
+  /** |L|² + |R|² in bin k. */
+  power(k: number): number {
+    return this.lr[k] * this.lr[k] + this.li[k] * this.li[k] + this.rr[k] * this.rr[k] + this.ri[k] * this.ri[k];
+  }
 
-    // Rotate both channels; synthesize both in one inverse transform
-    // (L real, R imaginary; the inverse is a conjugated forward FFT).
+  /**
+   * Bin k's true frequency (radians per sample) over the analysis hop,
+   * from its phase advance since the last frame in both channels together,
+   * so a partial in the side is tracked as surely as one in the middle.
+   */
+  omega(k: number, hopA: number): number {
+    const w = (TWO_PI * k) / this.N;
+    if (hopA <= 0) return w;
+    const { lr, li, rr, ri, plr, pli, prr, pri } = this;
+    const xr = lr[k] * plr[k] + li[k] * pli[k] + rr[k] * prr[k] + ri[k] * pri[k];
+    const xi = li[k] * plr[k] - lr[k] * pli[k] + ri[k] * prr[k] - rr[k] * pri[k];
+    let d = Math.atan2(xi, xr) - w * hopA;
+    d -= TWO_PI * Math.round(d / TWO_PI);
+    return w + d / hopA;
+  }
+
+  /**
+   * Adds this frame, bin k turned by rot[k], to the output around sample
+   * `c` (Hann synthesis window; the inverse is a conjugated forward FFT).
+   */
+  synthesize(rot: Float64Array, outL: Float32Array, outR: Float32Array, c: number, gain: number): void {
+    const { N, half, win, re, im, lr, li, rr, ri } = this;
     let lastR = NaN, cR = 1, sR = 0;
     for (let k = 0; k <= half; k++) {
       const r = rot[k];
@@ -286,19 +215,247 @@ export function stretchStereo(
         im[N - k] = yLi - yRr;
       }
     }
-    plan.forward(re, im);
+    this.plan.forward(re, im);
     const start = c - half;
+    const len = outL.length;
     for (let i = 0; i < N; i++) {
       const o = start + i;
-      if (o < 0 || o >= outLength) continue;
-      const w = win[i] * scale;
+      if (o < 0 || o >= len) continue;
+      const w = win[i] * gain;
       outL[o] += re[i] * w;                    // conj(conj(·)) real part
       outR[o] -= im[i] * w;                    // and imaginary part
     }
+  }
+}
 
+/**
+ * Phase rotations, one per bin, by phase gradient heap integration (Průša
+ * & Holighaus 2017) over a chain of bins whose neighbours are the adjacent
+ * entries. Bins are visited loudest first across this frame and the last:
+ * a peak that was loud in the last frame carries on at its own frequency,
+ * and every other bin takes its rotation from a louder neighbour. Partials
+ * stay locked to their peaks, and a transient, loud only now, spreads one
+ * rotation over all its bins and keeps its shape. A rotation is how far
+ * the synthesis phase sits from the analysis phase.
+ */
+class PhaseField {
+  readonly n: number;
+  /** This frame, filled by the caller before solve(): power and true frequency per bin. */
+  readonly pw: Float64Array;
+  readonly omega: Float64Array;
+  readonly rot: Float64Array;
+  private readonly prevPw: Float64Array;
+  private readonly prevRot: Float64Array;
+  private readonly done: Uint8Array;
+  private readonly hKey: Float64Array;
+  private readonly hVal: Int32Array;
+  private first = true;
+
+  constructor(n: number) {
+    this.n = n;
+    this.pw = new Float64Array(n); this.omega = new Float64Array(n); this.rot = new Float64Array(n);
+    this.prevPw = new Float64Array(n); this.prevRot = new Float64Array(n);
+    this.done = new Uint8Array(n);
+    this.hKey = new Float64Array(2 * n); this.hVal = new Int32Array(2 * n);
+  }
+
+  /** `advance`: synthesis hop minus analysis hop, the time a partial's phase must gain. */
+  solve(advance: number): void {
+    const { n, pw, omega, rot, prevPw, prevRot, done, hKey, hVal } = this;
+    if (this.first) { rot.fill(0); this.first = false; return; }
+    let hn = 0;
+    // A max-heap of bins keyed by power: bin i of the last frame is i,
+    // bin i of this frame is i + n.
+    const push = (key: number, val: number): void => {
+      let i = hn++;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (hKey[p] >= key) break;
+        hKey[i] = hKey[p]; hVal[i] = hVal[p]; i = p;
+      }
+      hKey[i] = key; hVal[i] = val;
+    };
+    const pop = (): number => {
+      const top = hVal[0];
+      const key = hKey[--hn], val = hVal[hn];
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1;
+        if (c >= hn) break;
+        if (c + 1 < hn && hKey[c + 1] > hKey[c]) c++;
+        if (hKey[c] <= key) break;
+        hKey[i] = hKey[c]; hVal[i] = hVal[c]; i = c;
+      }
+      hKey[i] = key; hVal[i] = val;
+      return top;
+    };
+    let maxPw = 0;
+    for (let i = 0; i < n; i++) if (pw[i] > maxPw) maxPw = pw[i];
+    const floor = maxPw * 1e-10;
+    let todo = 0;
+    for (let i = 0; i < n; i++) {
+      if (pw[i] > floor) { done[i] = 0; todo++; } else done[i] = 2;
+    }
+    for (let i = 0; i < n; i++) push(prevPw[i], i);
+    while (todo > 0 && hn > 0) {
+      const v = pop();
+      if (v < n) {
+        // Only a peak carries on in time: a bin between two close
+        // partials holds a mixture whose phase advance means nothing.
+        if (done[v] !== 0) continue;
+        if ((v > 0 && pw[v - 1] > pw[v]) || (v < n - 1 && pw[v + 1] > pw[v])) continue;
+        const r = prevRot[v] + omega[v] * advance;
+        rot[v] = r - TWO_PI * Math.round(r / TWO_PI);
+        done[v] = 1; todo--;
+        push(pw[v], v + n);
+      } else {
+        const k = v - n;
+        if (k > 0 && done[k - 1] === 0) { rot[k - 1] = rot[k]; done[k - 1] = 1; todo--; push(pw[k - 1], k - 1 + n); }
+        if (k < n - 1 && done[k + 1] === 0) { rot[k + 1] = rot[k]; done[k + 1] = 1; todo--; push(pw[k + 1], k + 1 + n); }
+      }
+    }
+    // Bins under the floor turn with the nearest bin below them.
+    for (let i = 0, last = 0; i < n; i++) { if (done[i] === 1) last = rot[i]; else rot[i] = last; }
+  }
+
+  /** This frame becomes the last one. */
+  commit(): void {
+    this.prevPw.set(this.pw);
+    this.prevRot.set(this.rot);
+  }
+}
+
+/** A frame centre's source sample: before the song starts, time runs at unity. */
+function sourceAt(warp: (tau: number) => number, c: number): number {
+  return c < 0 ? c : Math.round(warp(c));
+}
+
+export interface StretchOptions {
+  /** FFT size (a power of two). */
+  n?: number;
+  /** Synthesis hop, samples. */
+  hop?: number;
+}
+
+/**
+ * Plays a stereo signal along `warp`, pitch unchanged, with one frame
+ * length: a phase vocoder with one set of rotations for both channels.
+ * The repair itself uses stretchTwoBand; this is the single-resolution
+ * reference it is measured against.
+ */
+export function stretchStereo(
+  L: Float32Array, R: Float32Array,
+  warp: (tau: number) => number, outLength: number,
+  onProgress?: (pct: number) => void,
+  { n = 4096, hop = 1024 }: StretchOptions = {},
+): { L: Float32Array; R: Float32Array } {
+  const stft = new Stft(n);
+  const K = n / 2 + 1;
+  const field = new PhaseField(K);
+  const outL = new Float32Array(outLength), outR = new Float32Array(outLength);
+  // A periodic Hann, on analysis and synthesis, overlaps to 3N/8 per hop;
+  // the inverse transform is N times too big.
+  const gain = hop / ((3 / 8) * n) / n;
+  // The first frame that reaches sample 0, so the start overlaps in full.
+  const m0 = Math.floor(-n / 2 / hop) + 1;
+  const frames = Math.ceil((outLength + n / 2) / hop) + 1;
+  let prevA = 0;
+  for (let m = m0; m < frames; m++) {
+    const c = m * hop;
+    const a = sourceAt(warp, c);
+    const hopA = a - prevA;
+    stft.analyze(L, R, a);
+    for (let k = 0; k < K; k++) { field.pw[k] = stft.power(k); field.omega[k] = stft.omega(k, hopA); }
+    field.solve(hop - hopA);
+    field.rot[0] = 0;
+    field.rot[K - 1] = 0;                      // DC and Nyquist stay real
+    stft.synthesize(field.rot, outL, outR, c, gain);
+    field.commit();
     prevA = a;
-    prevPhi.set(phi); prevPw.set(pw); prevRot.set(rot);
-    if (onProgress && (m & 63) === 0) onProgress(m / frames);
+    if (onProgress && ((m - m0) & 63) === 0) onProgress((m - m0) / (frames - m0));
+  }
+  return { L: outL, R: outR };
+}
+
+/**
+ * Plays a stereo signal along `warp`, pitch unchanged, in two bands with
+ * one set of phases. `low` is the signal below `fc` (lowBand); the band
+ * above is the rest, taken frame by frame. Below fc, 4096-point frames
+ * keep bass partials a few hertz apart from beating; above it, 2048-point
+ * frames keep drum attacks sharp.
+ *
+ * The phases come from ONE field: a heap over the full signal's
+ * 4096-point bins below fc and its 2048-point bins above, analysed at the
+ * same frame centres, with the two runs of bins joined at fc. Both bands
+ * synthesize with that field, so a partial in the crossover, split
+ * between the bands, adds back in phase, and one straddling fc gets one
+ * rotation. (Two bands with phases of their own add a note near fc back
+ * at a random level, down to silence.)
+ */
+export function stretchTwoBand(
+  L: Float32Array, R: Float32Array, low: { L: Float32Array; R: Float32Array },
+  warp: (tau: number) => number, outLength: number, fs: number, fc: number,
+  onProgress?: (pct: number) => void,
+): { L: Float32Array; R: Float32Array } {
+  const f4 = new Stft(4096), f2 = new Stft(2048);    // the full signal: the field
+  const b4 = new Stft(4096), b2 = new Stft(2048);    // the bands: what is heard
+  const bin4 = fs / 4096, bin2 = fs / 2048;
+  const K4c = Math.floor(fc / bin4);                 // the field's last 4096-point bin
+  const K2c = Math.floor(K4c / 2) + 1;               // and its first 2048-point bin
+  const n4 = K4c + 1, n2 = 1024 - K2c + 1;
+  const field = new PhaseField(n4 + n2);
+  // Each band's bins through the crossover, beyond which it is silent.
+  const K4hi = Math.min(2048, Math.ceil((fc + 150) / bin4));
+  const K2lo = Math.max(1, Math.floor((fc - 150) / bin2));
+  const rotLow = new Float64Array(2049), rotHigh = new Float64Array(1025);
+  const outL = new Float32Array(outLength), outR = new Float32Array(outLength);
+  const Hs = 512;                                    // the field's hop, and the high band's
+  const gain2 = Hs / ((3 / 8) * 2048) / 2048;
+  const gain4 = (2 * Hs) / ((3 / 8) * 4096) / 4096;  // the low band's frames are every other one
+  // From the first low-band frame that reaches sample 0 (and it is even).
+  const m0 = -2;
+  const frames = Math.ceil((outLength + 2048) / Hs) + 2;
+  let prevA = 0;
+  for (let m = m0; m < frames; m++) {
+    const c = m * Hs;
+    const a = sourceAt(warp, c);
+    const hopA = a - prevA;
+    f4.analyze(L, R, a);
+    f2.analyze(L, R, a);
+    // A 4096-point Hann sums to twice a 2048-point one: a partial's power
+    // reads 4× in the long frame, and is scaled to compare like with like.
+    for (let i = 0; i < n4; i++) { field.pw[i] = f4.power(i) / 4; field.omega[i] = f4.omega(i, hopA); }
+    for (let j = 0; j < n2; j++) { field.pw[n4 + j] = f2.power(K2c + j); field.omega[n4 + j] = f2.omega(K2c + j, hopA); }
+    field.solve(Hs - hopA);
+    const rot = field.rot;
+
+    // The high band, every frame: above fc its own bins' rotations, below
+    // (the crossover) those of the long bins at the same frequency.
+    for (let k = 0; k <= 1024; k++) {
+      rotHigh[k] = k >= K2c ? rot[n4 + k - K2c] : k >= K2lo ? rot[Math.min(K4c, 2 * k)] : 0;
+    }
+    rotHigh[0] = 0;
+    rotHigh[1024] = 0;
+    b2.analyze(L, R, a, low.L, low.R);
+    b2.synthesize(rotHigh, outL, outR, c, gain2);
+
+    // The low band, every other frame: below fc its own bins' rotations,
+    // above (the crossover) those of the short bins at the same frequency.
+    if ((m & 1) === 0) {
+      for (let k = 0; k <= 2048; k++) {
+        rotLow[k] = k <= K4c ? rot[k]
+          : k <= K4hi ? rot[n4 + Math.min(n2 - 1, Math.max(0, Math.round(k / 2) - K2c))]
+          : 0;
+      }
+      rotLow[0] = 0;
+      rotLow[2048] = 0;
+      b4.analyze(low.L, low.R, a);
+      b4.synthesize(rotLow, outL, outR, c, gain4);
+    }
+
+    field.commit();
+    prevA = a;
+    if (onProgress && ((m - m0) & 63) === 0) onProgress((m - m0) / (frames - m0));
   }
   return { L: outL, R: outR };
 }
@@ -308,8 +465,8 @@ export function stretchStereo(
  * Blackman-Harris windowed sinc; ±25 Hz transition at 48 kHz, stopband
  * −92 dB) applied by FFT convolution, both channels in one complex
  * transform. The high band is the rest (x − low), so the two sum back to
- * the input exactly. The two bands' stretches are not quite coherent where
- * they overlap, so the transition is kept narrow.
+ * the input exactly, and share one phase field when stretched, so they
+ * add back in phase through the transition too.
  */
 export function lowBand(L: Float32Array, R: Float32Array, fs: number, fc: number): { L: Float32Array; R: Float32Array } {
   const taps = 8191, mid = (taps - 1) / 2;
@@ -357,21 +514,19 @@ export function lowBand(L: Float32Array, R: Float32Array, fs: number, fc: number
  */
 export const REPAIR_CROSSOVER_HZ = 700;
 
-/** The whole repair: plan the warp from the tempo curve, stretch both bands along it, sum. */
+/** The most a repair may stretch or squeeze any part of a song. */
+export const REPAIR_MAX_STRETCH = 0.25;
+
+/** The whole repair: plan the warp from the tempo curve, split the bands, stretch along it. */
 export function repairDrift(
   L: Float32Array, R: Float32Array, fs: number, curve: TempoCurve, targetBpm: number,
   onProgress?: (pct: number) => void,
 ): { L: Float32Array; R: Float32Array; plan: RepairPlan } {
   const plan = planRepair(curve, targetBpm, fs, L.length);
-  const fc = REPAIR_CROSSOVER_HZ;
-  const band = lowBand(L, R, fs, fc);
+  const low = lowBand(L, R, fs, REPAIR_CROSSOVER_HZ);
   onProgress?.(0.04);
-  const out = stretchStereo(band.L, band.R, plan.warp, plan.outLength,
-    (p) => onProgress?.(0.04 + 0.36 * p), { n: 4096, hop: 1024, band: [0, 2 * fc], fs });
-  // The high band, in the low band's buffers.
-  for (let i = 0; i < L.length; i++) { band.L[i] = L[i] - band.L[i]; band.R[i] = R[i] - band.R[i]; }
-  stretchStereo(band.L, band.R, plan.warp, plan.outLength,
-    (p) => onProgress?.(0.4 + 0.6 * p), { n: 2048, hop: 512, band: [fc / 2, fs / 2], fs, into: out });
+  const out = stretchTwoBand(L, R, low, plan.warp, plan.outLength, fs, REPAIR_CROSSOVER_HZ,
+    (p) => onProgress?.(0.04 + 0.96 * p));
   onProgress?.(1);
   return { ...out, plan };
 }

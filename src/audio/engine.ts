@@ -4,7 +4,7 @@
 import { ChainParams, NOMINAL_LUFS, stagingGainDbFor } from './dsp/params';
 import type { EncodeOptions } from './encode';
 import type { SongSection, TempoCurve, TempoDrift } from './analysis/tempo';
-import { planRepair, type RepairPlan } from './analysis/repair';
+import { planRepair, REPAIR_MAX_STRETCH, type RepairPlan } from './analysis/repair';
 import { encodeWavFloat } from './wav';
 
 export type { SongSection, TempoCurve, TempoDrift, DriftRegion } from './analysis/tempo';
@@ -47,12 +47,35 @@ export interface SourceInfo {
 type SourceFile = Pick<SourceInfo,
   'name' | 'durationSec' | 'sampleRate' | 'originalSampleRate' | 'originalBitDepth' | 'repairedSamples' | 'channels'>;
 
-function fileOf(s: SourceInfo): SourceFile {
-  return {
-    name: s.name, durationSec: s.durationSec, sampleRate: s.sampleRate,
-    originalSampleRate: s.originalSampleRate, originalBitDepth: s.originalBitDepth,
-    repairedSamples: s.repairedSamples, channels: s.channels,
-  };
+/** A stereo pair with the worker's analysis of it: ready to become the source in one step. */
+interface Take {
+  l: Float32Array;
+  r: Float32Array;
+  file: SourceFile;
+  analyzed: any;
+}
+
+/** A moment of a repair → the same moment of the file (identity without a repair). */
+function originalSec(plan: RepairPlan | null, sec: number): number {
+  return plan ? plan.warp(sec * TARGET_RATE) / TARGET_RATE : sec;
+}
+
+/** A moment of the file → the same moment of its repair (identity without a repair). */
+function repairedSec(plan: RepairPlan | null, sec: number): number {
+  if (!plan) return sec;
+  const s = sec * TARGET_RATE;
+  let lo = 0, hi = plan.outLength;
+  for (let i = 0; i < 48; i++) {
+    const m = (lo + hi) / 2;
+    if (plan.warp(m) < s) lo = m; else hi = m;
+  }
+  return lo / TARGET_RATE;
+}
+
+/** A take change, and where a moment of the last take is in the new one. */
+export interface TakeSwap {
+  info: SourceInfo;
+  map: (sec: number) => number;
 }
 
 export interface SourceDiagnostics {
@@ -316,6 +339,9 @@ export class AudioEngine {
   private loadQueue: Promise<unknown> = Promise.resolve();
   private loadSeq = 0;
 
+  /** The newest load that has finished (landed, failed or been overtaken). */
+  private settledSeq = 0;
+
   /** Decodes, resamples to 48 kHz, analyzes, and arms the worklet. */
   loadFile(data: ArrayBuffer, name: string, onPhase?: (phase: string) => void): Promise<SourceInfo | null> {
     const seq = ++this.loadSeq;
@@ -324,7 +350,16 @@ export class AudioEngine {
     const run = this.loadQueue.then(() =>
       (seq === this.loadSeq ? this.loadFileNow(data, name, seq, onPhase) : null));
     this.loadQueue = run.catch(() => undefined);
+    // Registered before the caller's own wait, so it has run by the time
+    // the caller hears back.
+    const settle = () => { this.settledSeq = Math.max(this.settledSeq, seq); };
+    run.then(settle, settle);
     return run;
+  }
+
+  /** A load is still decoding or analyzing. */
+  private loadPending(): boolean {
+    return this.settledSeq < this.loadSeq;
   }
 
   private async loadFileNow(
@@ -345,9 +380,7 @@ export class AudioEngine {
     if (seq !== this.loadSeq) return null;
     onPhase?.('ANALYSING LOUDNESS · PEAKS · STEREO');
     const stereo = toStereo(decoded);
-    this.original = null;
-    this.repair = null;
-    return this.installSource(stereo.l, stereo.r, {
+    const take = await this.analyzeTake(stereo.l, stereo.r, {
       name,
       durationSec: decoded.duration,
       sampleRate: TARGET_RATE,
@@ -356,15 +389,38 @@ export class AudioEngine {
       repairedSamples: stereo.repaired,
       channels: decoded.numberOfChannels,
     });
+    if (seq !== this.loadSeq) return null;
+    this.original = null;
+    this.repair = null;
+    return this.installTake(take);
+  }
+
+  /** A stereo pair and its analysis (loudness, peaks, stereo, the waveform) from the worker. */
+  private async analyzeTake(l: Float32Array, r: Float32Array, file: SourceFile): Promise<Take> {
+    const al = new Float32Array(l);
+    const ar = new Float32Array(r);
+    const worker = this.ensureWorker();
+    const analyzed: any = await new Promise((resolve) => {
+      this.analyzeWaiters.push(resolve);
+      worker.postMessage(
+        { type: 'analyze', l: al.buffer, r: ar.buffer, fs: TARGET_RATE, buckets: WAVEFORM_BUCKETS },
+        [al.buffer, ar.buffer],
+      );
+    });
+    if (analyzed.failed) throw new Error('analysis failed');
+    return { l, r, file, analyzed };
   }
 
   /**
-   * Makes a stereo pair the loaded source: the worklet plays it, the worker
-   * analyzes it (loudness, peaks, stereo, the waveform), and every cache of
-   * the previous source goes.
+   * Makes an analyzed take the loaded source, all in one step: the worklet
+   * plays it, its waveform and figures show, and every cache of the last
+   * take goes. Nothing awaits in between, so nobody ever sees half of one
+   * take and half of another.
    */
-  private async installSource(l: Float32Array, r: Float32Array, file: SourceFile): Promise<SourceInfo> {
+  private installTake(take: Take): SourceInfo {
+    const { l, r, file, analyzed } = take;
     this.gen++;
+    this.take = take;
     this.spectrogram = null;
     this.spectrogramPending = null;
     this.tempo = null;
@@ -375,22 +431,9 @@ export class AudioEngine {
     this.srcR = r;
 
     // Worklet gets its own copy (transferred).
-    const wl = new Float32Array(this.srcL);
-    const wr = new Float32Array(this.srcR);
+    const wl = new Float32Array(l);
+    const wr = new Float32Array(r);
     this.node!.port.postMessage({ type: 'load', l: wl.buffer, r: wr.buffer }, [wl.buffer, wr.buffer]);
-
-    // Analysis + waveform in the worker (transferred copies again).
-    const al = new Float32Array(this.srcL);
-    const ar = new Float32Array(this.srcR);
-    const worker = this.ensureWorker();
-    const analyzed: any = await new Promise((resolve) => {
-      this.analyzeWaiters.push(resolve);
-      worker.postMessage(
-        { type: 'analyze', l: al.buffer, r: ar.buffer, fs: TARGET_RATE, buckets: WAVEFORM_BUCKETS },
-        [al.buffer, ar.buffer],
-      );
-    });
-    if (analyzed.failed) throw new Error('analysis failed');
 
     this.waveform = {
       levels: analyzed.levels.map((lv: any) => ({
@@ -612,8 +655,10 @@ export class AudioEngine {
   }
 
   // ── drift repair ────────────────────────────────────────────────────
-  /** The file as decoded, kept while a drift repair stands in for it. */
-  private original: { l: Float32Array; r: Float32Array; source: SourceInfo; tempo: TempoInfo } | null = null;
+  /** The take that is the source now. */
+  private take: Take | null = null;
+  /** The file as decoded (with its analysis and tempo), kept while a drift repair stands in for it. */
+  private original: { take: Take; tempo: TempoInfo } | null = null;
   /** The repair in place: its target, and the warp for mapping times between the two. */
   repair: { targetBpm: number; plan: RepairPlan; originalDurationSec: number } | null = null;
 
@@ -622,26 +667,32 @@ export class AudioEngine {
   private repairSettle: ((d: any) => void) | null = null;
 
   /**
-   * Stretches the track onto a steady `targetBpm` and plays the result in
+   * Stretches the track onto a steady `targetBpm` and puts the result in
    * its place; the file as decoded stays for revertRepair. A repair always
-   * starts from the file, so a second one replaces the first. The stretch
-   * runs in a worker of its own, so a load never queues behind it (a load
-   * cancels it). Resolves null when cancelled or overtaken by a load.
+   * starts from the file, so a second one replaces the first. The stretch,
+   * and the analysis of what it made, run in a worker of their own (a load
+   * never waits behind it, and a load cancels it); the swap is one step.
+   * Resolves null when cancelled or when the track changed meanwhile.
    */
-  async repairDrift(targetBpm: number, onProgress?: (pct: number) => void): Promise<SourceInfo | null> {
-    const seq = this.loadSeq;
+  async repairDrift(targetBpm: number, onProgress?: (pct: number) => void): Promise<TakeSwap | null> {
+    if (this.loadPending()) return null;
+    const gen = this.gen;
     let base = this.original;
     if (!base) {
       const tempo = await this.requestTempo();
-      if (seq !== this.loadSeq) return null;
-      if (!this.srcL || !this.srcR || !this.source || !tempo) throw new Error('no track to repair');
-      base = { l: this.srcL, r: this.srcR, source: this.source, tempo };
+      if (gen !== this.gen || !tempo || !this.take) return null;
+      base = { take: this.take, tempo };
     }
     const curve = base.tempo.curve;
     if (!curve) throw new Error('no tempo curve to repair from');
+    const plan = planRepair(curve, targetBpm, TARGET_RATE, base.take.l.length);
+    if (Math.max(plan.maxStretch, -plan.minStretch) > REPAIR_MAX_STRETCH) {
+      throw new Error(`more than ${Math.round(REPAIR_MAX_STRETCH * 100)}% from the song's own tempo`);
+    }
     this.cancelRepair();
     const worker = new Worker('./audio/jmaster-render-worker.js');
     this.repairWorker = worker;
+    const from = base;
     const d: any = await new Promise((resolve) => {
       const settle = (v: any) => {
         if (this.repairWorker === worker) {
@@ -658,8 +709,8 @@ export class AudioEngine {
         if (e.data.type === 'repair-progress') onProgress?.(e.data.pct);
         else if (e.data.type === 'repaired') settle(e.data);
       };
-      const l = new Float32Array(base.l);
-      const r = new Float32Array(base.r);
+      const l = new Float32Array(from.take.l);
+      const r = new Float32Array(from.take.r);
       worker.postMessage(
         { type: 'repair', l: l.buffer, r: r.buffer, fs: TARGET_RATE, curve, targetBpm },
         [l.buffer, r.buffer],
@@ -667,70 +718,61 @@ export class AudioEngine {
     });
     if (d.cancelled) return null;
     if (d.failed) throw new Error(String(d.message ?? 'repair failed'));
+    // A load or another take got in while it stretched: this repair is of
+    // something no longer here.
+    if (gen !== this.gen || this.loadPending()) return null;
     const outL = new Float32Array(d.l);
     const outR = new Float32Array(d.r);
-    // Installing waits its turn behind any load, and a load that got in
-    // first wins.
-    const from = base;
-    const run = this.loadQueue.then(async (): Promise<SourceInfo | null> => {
-      if (seq !== this.loadSeq) return null;
-      this.original = from;
-      this.repair = {
-        targetBpm,
-        plan: planRepair(curve, targetBpm, TARGET_RATE, from.l.length),
-        originalDurationSec: from.source.durationSec,
-      };
-      return this.installSource(outL, outR, { ...fileOf(from.source), durationSec: outL.length / TARGET_RATE });
+    const lastPlan = this.repair?.plan ?? null;
+    this.original = from;
+    this.repair = { targetBpm, plan, originalDurationSec: from.take.file.durationSec };
+    const info = this.installTake({
+      l: outL, r: outR,
+      file: { ...from.take.file, durationSec: outL.length / TARGET_RATE },
+      analyzed: d.analyzed,
     });
-    this.loadQueue = run.catch(() => undefined);
-    return run;
+    return { info, map: (sec) => repairedSec(plan, originalSec(lastPlan, sec)) };
   }
 
-  /** Stops a repair's stretch; its promise resolves null. */
-  cancelRepair(): void {
-    this.repairSettle?.({ cancelled: true });
+  /** Stops a repair's stretch; its promise resolves null. False when none was running. */
+  cancelRepair(): boolean {
+    const settle = this.repairSettle;
+    if (!settle) return false;
+    settle({ cancelled: true });
+    return true;
   }
 
   /** What a repair starts from: the file's own tempo analysis and length (null until measured). */
   repairBase(): { tempo: TempoInfo; durationSec: number } | null {
-    if (this.original) return { tempo: this.original.tempo, durationSec: this.original.source.durationSec };
+    if (this.original) return { tempo: this.original.tempo, durationSec: this.original.take.file.durationSec };
     if (this.tempo && this.source) return { tempo: this.tempo, durationSec: this.source.durationSec };
     return null;
   }
 
-  /** Puts the file back in place of its drift repair. */
-  revertRepair(): Promise<SourceInfo | null> {
-    const seq = this.loadSeq;
-    const run = this.loadQueue.then(async (): Promise<SourceInfo | null> => {
-      const o = this.original;
-      if (!o || seq !== this.loadSeq) return null;
-      this.original = null;
-      this.repair = null;
-      const info = await this.installSource(o.l, o.r, fileOf(o.source));
-      this.tempo = o.tempo;                    // the file's own analysis still holds
-      return info;
-    });
-    this.loadQueue = run.catch(() => undefined);
-    return run;
+  /**
+   * Puts the file back in place of its drift repair, at once: its analysis
+   * and tempo were kept, so nothing is measured again.
+   */
+  revertRepair(): TakeSwap | null {
+    const o = this.original;
+    if (!o || this.loadPending()) return null;
+    this.cancelRepair();
+    const lastPlan = this.repair?.plan ?? null;
+    this.original = null;
+    this.repair = null;
+    const info = this.installTake(o.take);
+    this.tempo = o.tempo;
+    return { info, map: (sec) => originalSec(lastPlan, sec) };
   }
 
   /** A moment of the file → the same moment of its repair (identity without one). */
   toRepairedSec(sec: number): number {
-    const p = this.repair?.plan;
-    if (!p) return sec;
-    const s = sec * TARGET_RATE;
-    let lo = 0, hi = p.outLength;
-    for (let i = 0; i < 48; i++) {
-      const m = (lo + hi) / 2;
-      if (p.warp(m) < s) lo = m; else hi = m;
-    }
-    return lo / TARGET_RATE;
+    return repairedSec(this.repair?.plan ?? null, sec);
   }
 
   /** A moment of the repair → the same moment of the file (identity without one). */
   toOriginalSec(sec: number): number {
-    const p = this.repair?.plan;
-    return p ? p.warp(sec * TARGET_RATE) / TARGET_RATE : sec;
+    return originalSec(this.repair?.plan ?? null, sec);
   }
 
   /** The repaired track as a 32-bit float WAV (a stretch can peak past full scale); null without a repair. */

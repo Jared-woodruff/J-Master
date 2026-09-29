@@ -166,21 +166,31 @@ All in the render worker (`render-worker.ts`):
   grid. A phase vocoder plays the source along that warp, both channels in
   one complex FFT. Phases come from phase gradient heap integration (Průša
   & Holighaus 2017): bins are visited loudest first across this frame and
-  the last, a spectral peak carries on at its own measured frequency, and
-  every other bin takes its rotation from a louder neighbour, so partials
-  stay locked and a transient, loud only in the new frame, keeps its shape.
-  One rotation per bin serves both channels, so the stereo image can't
-  move. No single frame length suits a mix, so a linear-phase split at
-  700 Hz (8191-tap windowed sinc; the bands sum back exactly) gives the
-  lows 4096-point frames (bass partials a few hertz apart stay apart) and
-  the highs 2048 (drum attacks stay sharp). At unity the output is the
-  input (−145 dB). The limit is resolution: two partials closer than about
-  30 Hz (two low bass notes at once) share bins even at 4096 points, and
-  one of them can waver (24.5 cents and −1.4 dB on a 55 + 82.5 Hz test). The stretch runs in a worker of its own, terminated when
-  it lands, is cancelled or a new track loads, so a load never queues behind
-  it. The engine keeps the decoded file for REVERT and the warp for mapping
-  the playhead and loop between the file and its repair; batch and album
-  renders of the loaded track take the repair.
+  the last, a spectral peak carries on at its own frequency (measured from
+  both channels' phase advance, so side-only content tracks as well as
+  mid), and every other bin takes its rotation from a louder neighbour, so
+  partials stay locked and a transient, loud only in the new frame, keeps
+  its shape. One rotation per bin serves both channels, so the stereo image
+  can't move. No single frame length suits a mix, so a linear-phase split
+  at 700 Hz (8191-tap windowed sinc; the bands sum back exactly) is heard
+  through 4096-point frames below (bass partials a few hertz apart stay
+  apart) and 2048 above (drum attacks stay sharp), but the phases come from
+  one field: a heap over the full signal's 4096-point bins below 700 Hz and
+  its 2048-point bins above, analysed at the same frame centres every 512
+  samples and joined at the split. Both bands synthesize with it, so a note
+  on the split adds back in phase (with a field per band it came back at a
+  random level, down to silence). At unity the output is the input
+  (−145 dB) from the first sample. The limit is resolution: two partials
+  closer than about 30 Hz (two low bass notes at once) share bins even at
+  4096 points, and one of them can waver (24.5 cents and −1.4 dB on a
+  55 + 82.5 Hz test). The stretch, and the analysis of its result, run in
+  a worker of their own, terminated when it lands, is cancelled or a new
+  track loads, so a load never queues behind it. Every take change (a
+  load, a repair, a revert) happens in one synchronous step after its
+  analysis, so nothing ever sees half of one take: the engine keeps the
+  decoded file and its analysis for an instant REVERT, and each repair's
+  warp to map the playhead and loop onto the new take. Batch and album
+  renders of the loaded track take the repair, and wait for one in flight.
 - **profile:** 30-band average spectrum + side/mid ratio, used by reference
   matching and AUTO-MASTER's genre heuristics.
 - **preview:** full-chain render reduced to overlay peaks + loudness lane.

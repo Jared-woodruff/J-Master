@@ -323,13 +323,13 @@ function swapTake(
   if (at.playing) get().togglePlay();
 }
 
-/** Where the listener is, as moments of the file (a repair maps its own times back). */
-function listenerAt(s: JMasterState): { playSec: number; loop: [number, number] | null; playing: boolean } {
+/** Where the listener is in the last take (playhead, loop, transport), mapped into the new one. */
+function listenerIn(
+  s: JMasterState, map: (sec: number) => number,
+): { playSec: number; loop: [number, number] | null; playing: boolean } {
   return {
-    playSec: engine.toOriginalSec(s.playheadSec),
-    loop: s.loopStartSec !== null && s.loopEndSec !== null
-      ? [engine.toOriginalSec(s.loopStartSec), engine.toOriginalSec(s.loopEndSec)]
-      : null,
+    playSec: map(s.playheadSec),
+    loop: s.loopStartSec !== null && s.loopEndSec !== null ? [map(s.loopStartSec), map(s.loopEndSec)] : null,
     playing: s.playing,
   };
 }
@@ -347,7 +347,7 @@ async function openProject(
     const track = proj.track && typeof proj.track.name === 'string'
       ? { name: proj.track.name, path: typeof proj.track.path === 'string' ? proj.track.path : null }
       : null;
-    const repairBpm = cleanRepair(proj.track?.repair);
+    const savedRepair = cleanRepair(proj.track?.repair);
     // Audio first, so loadFile's per-track resets don't clobber the console.
     pendingProject = null;
     let trackLoaded = false;
@@ -369,7 +369,7 @@ async function openProject(
     // Until its track is loaded, the project keeps that track (a save
     // still names it) and its per-track corrections for when it arrives.
     if (track && !trackLoaded) {
-      pendingProject = { track, balanceDb: projConsole.balanceDb, bassMono: projConsole.bassMono, repairBpm };
+      pendingProject = { track, balanceDb: projConsole.balanceDb, bassMono: projConsole.bassMono, repair: savedRepair };
     }
     const fmt = proj.export?.format;
     const batchDir = typeof proj.batch?.dir === 'string' && !/^[\\/]{2}/.test(proj.batch.dir) ? proj.batch.dir : null;
@@ -416,8 +416,7 @@ async function openProject(
     set({ batchItems: items });
     void scanBatchItems(set as any, get);
     get().pushToast('PROJECT OPENED', 'run');
-    // The same stretch of the same file: the repair comes back exactly.
-    if (trackLoaded && repairBpm !== null) void get().repairDrift(repairBpm);
+    if (trackLoaded && savedRepair) rerunRepair(savedRepair, get);
   } catch {
     get().pushToast('PROJECT FILE UNREADABLE', 'fault');
   }
@@ -595,8 +594,11 @@ interface ProjectFile {
   app: 'J-Master';
   fileVersion: 1;
   savedAt: string;
-  /** `repair`: a drift repair to re-run on the file when the project opens. */
-  track: { name: string; path: string | null; repair?: { targetBpm: number } } | null;
+  /**
+   * `repair`: a drift repair to re-run when the project opens, with the
+   * length of the file it was made for (another file is left alone).
+   */
+  track: { name: string; path: string | null; repair?: SavedRepair } | null;
   console: ConsoleState;
   snapshots: { A: ConsoleSnapshot | null; B: ConsoleSnapshot | null };
   activeSlot: 'A' | 'B';
@@ -631,13 +633,44 @@ let pendingProject: {
   balanceDb: number;
   bassMono: boolean;
   /** The project's drift repair, re-run when its own track arrives. */
-  repairBpm: number | null;
+  repair: SavedRepair | null;
 } | null = null;
 
-/** A drift repair's target from a file: a plain tempo in a sane range, or null. */
-function cleanRepair(raw: unknown): number | null {
-  const bpm = (raw as { targetBpm?: unknown } | null)?.targetBpm;
-  return typeof bpm === 'number' && Number.isFinite(bpm) && bpm >= 40 && bpm <= 300 ? bpm : null;
+interface SavedRepair {
+  targetBpm: number;
+  /** The file's length when it was repaired; null in a project that didn't record it. */
+  fileSec?: number | null;
+}
+
+/** A drift repair from a project file: a plain tempo in a sane range (and a length), or null. */
+function cleanRepair(raw: unknown): SavedRepair | null {
+  const r = raw as { targetBpm?: unknown; fileSec?: unknown } | null;
+  const bpm = r?.targetBpm;
+  if (typeof bpm !== 'number' || !Number.isFinite(bpm) || bpm < 40 || bpm > 300) return null;
+  const sec = r?.fileSec;
+  return { targetBpm: bpm, fileSec: typeof sec === 'number' && Number.isFinite(sec) && sec > 0 ? sec : null };
+}
+
+/** The repair to save: the one being stretched, else the one in place (null without either). */
+function repairToSave(s: JMasterState): SavedRepair | null {
+  const bpm = s.repairing?.targetBpm ?? s.driftRepair?.targetBpm;
+  if (bpm === undefined || !s.source) return null;
+  return { targetBpm: bpm, fileSec: s.driftRepair?.originalDurationSec ?? s.source.durationSec };
+}
+
+/**
+ * A project's repair, re-run on the file it was made for: the same file
+ * analyzes the same, so the same tempo gives the same stretch. A file of
+ * another length is another take, and is left as it is.
+ */
+function rerunRepair(saved: SavedRepair, get: () => JMasterState): void {
+  const src = get().source;
+  if (!src) return;
+  if (saved.fileSec != null && Math.abs(src.durationSec - saved.fileSec) > 0.01) {
+    get().pushToast('THE FILE CHANGED SINCE ITS DRIFT REPAIR · NOT RE-APPLIED', 'warn');
+    return;
+  }
+  void get().repairDrift(saved.targetBpm);
 }
 
 /** Release tags from a file: strings only, each at most 200 characters. */
@@ -807,7 +840,8 @@ interface JMasterState {
   /** Stretches the track onto one steady tempo, pitch unchanged; the file stays for revertRepair. */
   repairDrift(targetBpm: number): Promise<void>;
   cancelRepair(): void;
-  revertRepair(): Promise<void>;
+  /** Puts the file back in place of its repair, at once. */
+  revertRepair(): void;
   /** Saves the repaired track as a 32-bit float WAV. */
   saveRepairedWav(): Promise<void>;
   switchSlot(slot: 'A' | 'B'): void;
@@ -1374,10 +1408,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         set({ undoDepth: 0, redoDepth: 0 });
         // The track a project was waiting for: its corrections return, and
         // its drift repair too once it is that same file.
-        let pendingRepair: number | null = null;
+        let pendingRepair: SavedRepair | null = null;
         if (pendingProject) {
           set({ balanceDb: pendingProject.balanceDb, bassMono: pendingProject.bassMono });
-          if (pendingProject.track.name === name) pendingRepair = pendingProject.repairBpm;
+          if (pendingProject.track.name === name) pendingRepair = pendingProject.repair;
           pendingProject = null;
         }
         if (get().matchRef) void refitMatch(source, set, get);
@@ -1405,7 +1439,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         void engine.requestTempo().then((t) => {
           if (get().source !== source) return;
           applyTempo(t, set, get);
-          if (pendingRepair !== null) void get().repairDrift(pendingRepair);
+          if (pendingRepair) rerunRepair(pendingRepair, get);
         });
       } catch (err) {
         if (token !== loadToken) return;
@@ -1602,6 +1636,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         return;
       }
       if (s.batchItems.length === 0 || s.albumAssembling) return;
+      // The loaded track may be on the album, and is about to change.
+      if (s.repairing) {
+        get().pushToast('THE DRIFT REPAIR IS STILL RUNNING · ASSEMBLE WHEN IT LANDS', 'warn');
+        return;
+      }
       if (!s.batchDir) {
         await get().chooseBatchDir();
         if (!get().batchDir) return;
@@ -2050,34 +2089,32 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     async repairDrift(targetBpm) {
       const s = get();
-      if (!s.loaded || !s.source || s.repairing || s.exporting) return;
+      if (!s.loaded || !s.source || s.loading || s.repairing || s.exporting) return;
       const token = ++repairToken;
-      const at = listenerAt(s);
       set({ repairing: { targetBpm, pct: 0 } });
       try {
-        const info = await engine.repairDrift(targetBpm, (pct) => {
+        const swap = await engine.repairDrift(targetBpm, (pct) => {
           if (token === repairToken) set({ repairing: { targetBpm, pct } });
         });
-        if (!info || token !== repairToken) return;
-        const originalDurationSec = engine.repair?.originalDurationSec ?? s.source.durationSec;
-        // The drift it removed, from the file's own analysis (a project
-        // re-running its repair gets here before the store has seen it).
-        const drift = engine.repairBase()?.tempo.drift ?? null;
-        swapTake(info, {
+        if (!swap) return;
+        // The engine has just switched takes, and nothing has run since:
+        // the playhead, loop and transport are still where the last take
+        // had them, and the swap maps them onto the repair.
+        const st = get();
+        const base = engine.repairBase();
+        const drift = base?.tempo.drift ?? null;
+        const originalDurationSec = engine.repair?.originalDurationSec ?? swap.info.durationSec;
+        swapTake(swap.info, {
           targetBpm,
-          fromBpm: drift?.refBpm ?? targetBpm,
-          toBpm: drift?.endBpm ?? targetBpm,
+          fromBpm: drift?.refBpm ?? base?.tempo.bpm ?? targetBpm,
+          toBpm: drift?.endBpm ?? base?.tempo.bpm ?? targetBpm,
           originalDurationSec,
-        }, {
-          playSec: engine.toRepairedSec(at.playSec),
-          loop: at.loop ? [engine.toRepairedSec(at.loop[0]), engine.toRepairedSec(at.loop[1])] : null,
-          playing: get().playing,
-        }, set, get);
+        }, listenerIn(st, swap.map), set, get);
         set({ repairOpen: false });
         get().pushToast(
-          `DRIFT REPAIRED · STEADY ${bpmText(targetBpm)} BPM · ${mmss(originalDurationSec)} → ${mmss(info.durationSec)}`, 'run');
+          `DRIFT REPAIRED · STEADY ${bpmText(targetBpm)} BPM · ${mmss(originalDurationSec)} → ${mmss(swap.info.durationSec)}`, 'run');
         void engine.requestTempo().then((t) => {
-          if (get().source === info) applyTempo(t, set, get);
+          if (get().source === swap.info) applyTempo(t, set, get);
         });
       } catch (err) {
         if (token !== repairToken) return;
@@ -2089,28 +2126,21 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     cancelRepair() {
       if (!get().repairing) return;
-      engine.cancelRepair();
-      get().pushToast('REPAIR CANCELLED', 'info');
+      if (engine.cancelRepair()) get().pushToast('REPAIR CANCELLED', 'info');
     },
 
-    async revertRepair() {
+    revertRepair() {
       const s = get();
-      if (!s.driftRepair || s.repairing || s.exporting) return;
-      const token = ++repairToken;
-      const at = listenerAt(s);
-      try {
-        const info = await engine.revertRepair();
-        if (!info || token !== repairToken) return;
-        swapTake(info, null, { ...at, playing: get().playing }, set, get);
-        // The file's own analysis comes straight back; its drift is known.
-        void engine.requestTempo().then((t) => {
-          if (get().source === info) applyTempo(t, set, get, false);
-        });
-        get().pushToast('DRIFT REPAIR REMOVED · THE FILE PLAYS AGAIN', 'info');
-      } catch (err) {
-        if (token !== repairToken) return;
-        get().pushToast(`REVERT FAILED · ${String((err as Error)?.message ?? err).toUpperCase()}`, 'fault');
-      }
+      if (!s.driftRepair || s.loading || s.repairing || s.exporting) return;
+      // At once: the file's analysis was kept, so nothing is measured again.
+      const swap = engine.revertRepair();
+      if (!swap) return;
+      repairToken++;
+      swapTake(swap.info, null, listenerIn(s, swap.map), set, get);
+      void engine.requestTempo().then((t) => {
+        if (get().source === swap.info) applyTempo(t, set, get, false);
+      });
+      get().pushToast('DRIFT REPAIR REMOVED · THE FILE PLAYS AGAIN', 'info');
     },
 
     async saveRepairedWav() {
@@ -2342,9 +2372,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         fileVersion: 1,
         savedAt: new Date().toISOString(),
         track: s.source
-          ? { name: s.source.name, path: s.trackPath, ...(s.driftRepair ? { repair: { targetBpm: s.driftRepair.targetBpm } } : {}) }
+          ? { name: s.source.name, path: s.trackPath, ...(repairToSave(s) ? { repair: repairToSave(s)! } : {}) }
           : pendingProject
-            ? { ...pendingProject.track, ...(pendingProject.repairBpm !== null ? { repair: { targetBpm: pendingProject.repairBpm } } : {}) }
+            ? { ...pendingProject.track, ...(pendingProject.repair ? { repair: pendingProject.repair } : {}) }
             : null,
         console: captureConsole(s),
         snapshots: s.snapshots,
@@ -2563,6 +2593,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     async startBatch() {
       const s = get();
       if (s.batchRunning || s.batchItems.length === 0) return;
+      // The loaded track may be in the queue, and is about to change.
+      if (s.repairing) {
+        get().pushToast('THE DRIFT REPAIR IS STILL RUNNING · MASTER WHEN IT LANDS', 'warn');
+        return;
+      }
       batchCancelled = false;
       // Everything already mastered: MASTER ALL means again, with the
       // console as it is now. Otherwise only what's left (or failed) runs.

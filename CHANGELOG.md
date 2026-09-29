@@ -10,15 +10,19 @@
   in place of the file (batch and album renders of the loaded track too),
   the grid and CLICK go back to one fixed tempo, REVERT brings the file
   back, SAVE WAV writes the repair as a 32-bit float WAV, and a project
-  re-runs the repair when it opens. The file on disk is never touched.
+  re-runs the repair when it opens (on the same file only). The file on
+  disk is never touched.
 - How it holds up: the warp is built from the tempo curve integrated into
   a beat count (tracked beats jitter too much to steer a stretch), and the
-  audio is stretched in two bands, long frames below 700 Hz so bass
-  partials don't beat and short frames above so drum attacks stay sharp.
+  audio is heard through two frame lengths, long below 700 Hz so bass
+  partials don't beat and short above so drum attacks stay sharp, with one
+  set of phases across both, so a note on the split comes back whole.
   On the drift demo (110.0 → 114.2 BPM) every true beat lands within 9 ms
   of a steady 110 BPM grid (95th percentile) and the repair re-measures as
   a steady 110.0 BPM; a steady song "repaired" to its own tempo comes back
   unchanged (−145 dB).
+- Fix: a source that peaks past full scale (a float file, or a repair) no
+  longer spills over the edge of its waveform lane.
 
 ## 2.6.0
 - **Tempo drift detection.** Generated tracks often speed up or slow down

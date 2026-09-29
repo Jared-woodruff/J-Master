@@ -188,7 +188,9 @@ function repair(msg: RepairMsg): void {
       const q = Math.floor(pct * 100);
       if (q !== last) { last = q; post({ type: 'repair-progress', pct }); }
     });
-    post({ type: 'repaired', l: out.L.buffer, r: out.R.buffer }, [out.L.buffer, out.R.buffer]);
+    // Its analysis too, so the engine can put it in place in one step.
+    const { result, transfer } = analysisOf(out.L, out.R, msg.fs);
+    post({ type: 'repaired', l: out.L.buffer, r: out.R.buffer, analyzed: result }, [out.L.buffer, out.R.buffer, ...transfer]);
   } catch (err) {
     post({ type: 'repaired', failed: true, message: String(err) });
   }
@@ -381,9 +383,17 @@ function post(data: any, transfer?: Transferable[]): void {
 }
 
 function analyze(msg: AnalyzeMsg): void {
-  const L = new Float32Array(msg.l);
-  const R = new Float32Array(msg.r);
-  const loudnessHops = computeLoudnessHops(L, R, msg.fs);
+  const { result, transfer } = analysisOf(new Float32Array(msg.l), new Float32Array(msg.r), msg.fs);
+  post({ type: 'analyzed', reqId: msg.reqId, ...result }, transfer);
+}
+
+/**
+ * A source's analysis: loudness, peaks, balance, the diagnosis
+ * measurements, the waveform pyramid and the loudness lane (with the
+ * buffers to transfer). Reads the audio, never changes it.
+ */
+function analysisOf(L: Float32Array, R: Float32Array, fs: number): { result: Record<string, unknown>; transfer: Transferable[] } {
+  const loudnessHops = computeLoudnessHops(L, R, fs);
   const lufs = gatedLoudnessFromHops(loudnessHops);
   const lra = loudnessRangeFromHops(loudnessHops);
   // Short-term loudness lane: one point per 0.5 s.
@@ -402,13 +412,13 @@ function analyze(msg: AnalyzeMsg): void {
 
   // ── source diagnostics (the AI-music pathology checks) ──────────────
   // 1. Bass placement: side-vs-mid energy below 140 Hz.
-  const sideLp1 = new Biquad(); sideLp1.setLowpass(msg.fs, 140, 0.707);
-  const midLp1 = new Biquad(); midLp1.setLowpass(msg.fs, 140, 0.707);
+  const sideLp1 = new Biquad(); sideLp1.setLowpass(fs, 140, 0.707);
+  const midLp1 = new Biquad(); midLp1.setLowpass(fs, 140, 0.707);
   // 2. HF texture: >4.5 kHz share of the mono programme.
-  const harshHp = new Biquad(); harshHp.setHighpass(msg.fs, 4500, 0.707);
+  const harshHp = new Biquad(); harshHp.setHighpass(fs, 4500, 0.707);
   let sideBassSum = 0, midBassSum = 0, hfSum = 0, monoSum = 0;
   // 3. Width stability: correlation per half-second window, energy-gated.
-  const corrWin = Math.round(msg.fs / 2);
+  const corrWin = Math.round(fs / 2);
   let wLr = 0, wLl = 0, wRr = 0, wCnt = 0;
   const corrs: { corr: number; energy: number }[] = [];
   for (let i = 0; i < L.length; i++) {
@@ -496,13 +506,13 @@ function analyze(msg: AnalyzeMsg): void {
   });
   transfer.push(stSeries.buffer);
 
-  post(
-    {
-      type: 'analyzed', reqId: msg.reqId, lufs, lra, truePeakDb, samplePeakDb, balanceOffsetDb,
+  return {
+    result: {
+      lufs, lra, truePeakDb, samplePeakDb, balanceOffsetDb,
       diagnostics, levels: levelsOut, stSeries: stSeries.buffer, stStepSec: 0.5,
     },
     transfer,
-  );
+  };
 }
 
 async function render(msg: RenderMsg): Promise<void> {

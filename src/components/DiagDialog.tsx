@@ -68,6 +68,7 @@ export function DiagDialog() {
   const tempo = useStore((s) => s.tempo);
   const driftRepair = useStore((s) => s.driftRepair);
   const repairing = useStore((s) => s.repairing);
+  const repairOpen = useStore((s) => s.repairOpen);
   const openRepair = useStore((s) => s.openRepair);
   const revertRepair = useStore((s) => s.revertRepair);
   const saveRepairedWav = useStore((s) => s.saveRepairedWav);
@@ -113,7 +114,8 @@ export function DiagDialog() {
   const anyChecked = issues.some((i) => i.checked && !fixApplied(i));
 
   return (
-    <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) openDiag(false); }}>
+    // Under the Repair sheet, this one is out of reach (no Tab stops behind it).
+    <div className="scrim" inert={repairOpen} onPointerDown={(e) => { if (e.target === e.currentTarget) openDiag(false); }}>
       <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Track diagnosis" style={{ width: 520 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
@@ -196,9 +198,13 @@ export function DiagDialog() {
             </div>
             <div className="statgrid">
               <div className="row">
-                <span className="spec">THE FILE DRIFTED</span>
+                <span className="spec">{Math.abs(driftRepair.toBpm - driftRepair.fromBpm) >= 0.05 ? 'THE FILE DRIFTED' : 'THE FILE RAN AT'}</span>
                 <span className="leader" />
-                <span className="spec-value">{driftRepair.fromBpm.toFixed(1)} → {driftRepair.toBpm.toFixed(1)} BPM</span>
+                <span className="spec-value">
+                  {Math.abs(driftRepair.toBpm - driftRepair.fromBpm) >= 0.05
+                    ? `${driftRepair.fromBpm.toFixed(1)} → ${driftRepair.toBpm.toFixed(1)} BPM`
+                    : `${driftRepair.fromBpm.toFixed(1)} BPM`}
+                </span>
               </div>
               <div className="row">
                 <span className="spec">NOW PLAYS AT</span>
@@ -218,7 +224,7 @@ export function DiagDialog() {
               SAVE IT AS A 32-BIT FLOAT WAV TO USE ELSEWHERE.
             </div>
             <div className="drow" style={{ justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn btn-sm btn-secondary" disabled={!!repairing} onClick={() => void revertRepair()}>
+              <button className="btn btn-sm btn-secondary" disabled={!!repairing} onClick={revertRepair}>
                 REVERT TO THE FILE
               </button>
               <button className="btn btn-sm btn-secondary" onClick={() => openRepair(true)}>

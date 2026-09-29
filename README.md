@@ -329,7 +329,7 @@ scriptable hook (`window.__jmaster`) that drives the real app:
 | Tempo drift detection | a +4% ramp, a +2.5% step and a ±1.2% wobble each flagged where it happens; steady tracks measure within ±0.03 BPM and are never flagged |
 | CLICK follows a drifting track | every click within 1 sample of its tracked beat, accented on the bar |
 | Drift repair lands on the grid | the drift demo (110.0 → 114.2 BPM) repaired to 110: its 145 true beats land within 3.6 ms of a steady 110 BPM grid (median; 9.1 ms at the 95th percentile), and it re-measures as a steady 110.0 BPM |
-| Drift repair leaves the sound alone | a steady song repaired to its own tempo comes back unchanged (−145 dB); a bass note, a chord and a cluster keep every partial's pitch within 0.1 cent and level within 0.2 dB (0.5 dB for a partial right on the 700 Hz band split); loudness moves 0.03 LU on the demo |
+| Drift repair leaves the sound alone | a steady song repaired to its own tempo comes back unchanged (−145 dB, from the first sample); a bass note, a chord, a cluster and partials right on the 700 Hz band split keep their pitch within 0.1 cent and level within 0.3 dB, and notes re-struck on the split come back at full level every time; loudness moves 0.03 LU on the demo |
 | Section detection | demo track boundaries at 17.5, 34.9, 52.4 and 69.8 s; its bar lines fall at 17.45, 34.91, 52.36 and 69.82 s; the same with 10 s of silence before or 40 s after, and with 2–8 s risers before each change |
 | CD image frame alignment | track 2 INDEX at exactly 00:34:00 for a 32 s track plus a 2 s gap |
 | Balance correction | +2.03 dB measured on a +2.02 dB expected shift |
