@@ -174,7 +174,9 @@ class JMasterProcessor extends AudioWorkletProcessor {
       }
     }
 
-    this.chain.processBlock(outL, outR, 0, n, start);
+    // Fades follow the source positions run by run, so a loop that wraps
+    // mid-block fades (or doesn't) exactly where the song does.
+    this.chain.processBlock(outL, outR, 0, n, start, this.spans, this.spanCount);
     this.playhead = pos;
 
     // Monitor matrix (worklet-only, never in a render): fold or solo AFTER

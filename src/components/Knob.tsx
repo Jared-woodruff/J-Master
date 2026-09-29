@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface KnobProps {
   label: string;
@@ -64,10 +64,25 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
 
   const onPointerUp = useCallback(() => { drag.current = null; setGrabbed(false); }, []);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    const step = (max - min) / (e.shiftKey ? 200 : 50);
-    onChange(clamp(value + (e.deltaY < 0 ? step : -step), min, max));
-  }, [value, max, min, onChange]);
+  // Wheel over a knob turns it and nothing else: React's wheel handlers are
+  // passive and can't stop the panel scrolling too, so this one is native.
+  const svgRef = useRef<SVGSVGElement>(null);
+  const latest = useRef({ value, min, max, onChange });
+  latest.current = { value, min, max, onChange };
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (d === 0) return;
+      e.preventDefault();
+      const k = latest.current;
+      const step = (k.max - k.min) / (e.shiftKey ? 200 : 50);
+      k.onChange(clamp(k.value + (d < 0 ? step : -step), k.min, k.max));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   const angle = angleFor(value, min, max);
   const zeroAngle = bipolarFrom !== undefined ? angleFor(bipolarFrom, min, max) : -135;
@@ -84,6 +99,7 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
     <>
       <span className="spec klabel">{label}</span>
       <svg
+        ref={svgRef}
         className={`knob-svg ${grabbed ? 'grabbed' : ''}`}
         width={size}
         height={size}
@@ -99,12 +115,13 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
         onPointerUp={onPointerUp}
         onLostPointerCapture={onPointerUp}
         onDoubleClick={() => onChange(defaultValue)}
-        onWheel={onWheel}
         onKeyDown={(e) => {
           const step = (max - min) / (e.shiftKey ? 200 : 50);
           if (e.key === 'ArrowUp' || e.key === 'ArrowRight') onChange(clamp(value + step, min, max));
           else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') onChange(clamp(value - step, min, max));
           else if (e.key === 'Home') onChange(defaultValue);
+          else return;
+          e.preventDefault(); // the key is the knob's, not the panel's scroll
         }}
       >
         {/* tick marks */}
@@ -144,11 +161,13 @@ export function Knob({ label, value, min, max, defaultValue, bipolarFrom, format
           }}
         />
       ) : (
-        <span
+        <button
+          type="button"
           className={`kvalue ${grabbed ? 'grabbed' : ''}`}
           title="Click to type a value"
+          aria-label={`${label}: ${format(value)} · type a value`}
           onClick={() => setEditing(true)}
-        >{format(value)}</span>
+        >{format(value)}</button>
       )}
     </>
   );

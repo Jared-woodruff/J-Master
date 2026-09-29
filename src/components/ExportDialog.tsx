@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useStore, masterFileName, encodeOptionsFrom } from '../state/store';
+import { useStore, masterFileName, encodeOptionsFrom, withFormatExt } from '../state/store';
 import type { ExportFormat } from '../audio/encode';
 import { MetaFields } from './MetaFields';
+import { dbtpText, lufsText } from '../lib/level-text';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 const ALL_FORMATS: ExportFormat[] = ['wav', 'flac', 'mp3', 'opus'];
 
@@ -34,6 +36,8 @@ export function ExportDialog() {
   const toggleExportExtra = useStore((s) => s.toggleExportExtra);
 
   const [fileName, setFileName] = useState('');
+  // A name the user typed survives format changes (only its extension follows).
+  const [nameTyped, setNameTyped] = useState(false);
   const [title, setTitle] = useState('');
 
   const extras = exportExtras.filter((f) => f !== format);
@@ -41,14 +45,20 @@ export function ExportDialog() {
     f === 'mp3' ? `MP3 ${mp3Kbps}` : f === 'opus' ? `OPUS ${opusKbps}` : `${f.toUpperCase()} ${bitDepth}`;
 
   useEffect(() => {
-    if (open && source) {
-      setFileName(masterFileName(source.name, encodeOptionsFrom(useStore.getState())));
-    }
+    if (open) setNameTyped(false);
+  }, [open, source]);
+
+  useEffect(() => {
+    if (!open || !source) return;
+    if (nameTyped) setFileName((n) => (n.trim() ? withFormatExt(n, format) : n));
+    else setFileName(masterFileName(source.name, encodeOptionsFrom(useStore.getState())));
   }, [open, source, format, bitDepth, mp3Kbps, opusKbps]);
 
   useEffect(() => {
     if (open && source) setTitle(source.name.replace(/\.[^.]+$/, ''));
   }, [open, source]);
+
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
 
   if (!open || !source) return null;
 
@@ -67,7 +77,7 @@ export function ExportDialog() {
         openExport(false);
       }
     }}>
-      <div className="dialog frame" role="dialog" aria-label="Export master" style={{ width: 560 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Export master" style={{ width: 560 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
@@ -84,7 +94,8 @@ export function ExportDialog() {
                 type="text"
                 value={fileName}
                 disabled={busy}
-                onChange={(e) => setFileName(e.target.value)}
+                aria-label="File name"
+                onChange={(e) => { setFileName(e.target.value); setNameTyped(true); }}
                 spellCheck={false}
               />
             </div>
@@ -94,6 +105,7 @@ export function ExportDialog() {
                 type="text"
                 value={title}
                 disabled={busy}
+                aria-label="Title tag"
                 onChange={(e) => setTitle(e.target.value)}
                 spellCheck={false}
               />
@@ -116,27 +128,27 @@ export function ExportDialog() {
             </div>
             <div className="formrow">
               <div className="seg grow" style={{ flex: 1.4 }} role="group" aria-label="Format">
-                <button className={format === 'wav' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('wav')}>WAV</button>
-                <button className={format === 'flac' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('flac')}>FLAC</button>
-                <button className={format === 'mp3' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('mp3')}>MP3</button>
-                <button className={format === 'opus' ? 'on' : ''} disabled={busy} onClick={() => setExportFormat('opus')}>OPUS</button>
+                <button className={format === 'wav' ? 'on' : ''} aria-pressed={format === 'wav'} disabled={busy} onClick={() => setExportFormat('wav')}>WAV</button>
+                <button className={format === 'flac' ? 'on' : ''} aria-pressed={format === 'flac'} disabled={busy} onClick={() => setExportFormat('flac')}>FLAC</button>
+                <button className={format === 'mp3' ? 'on' : ''} aria-pressed={format === 'mp3'} disabled={busy} onClick={() => setExportFormat('mp3')}>MP3</button>
+                <button className={format === 'opus' ? 'on' : ''} aria-pressed={format === 'opus'} disabled={busy} onClick={() => setExportFormat('opus')}>OPUS</button>
               </div>
               {format === 'wav' || format === 'flac' ? (
                 <div className="seg grow" role="group" aria-label="Bit depth">
-                  <button className={bitDepth === 24 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(24)}>24 BIT</button>
-                  <button className={bitDepth === 16 ? 'on' : ''} disabled={busy} onClick={() => setExportBitDepth(16)}>16 BIT</button>
+                  <button className={bitDepth === 24 ? 'on' : ''} aria-pressed={bitDepth === 24} disabled={busy} onClick={() => setExportBitDepth(24)}>24 BIT</button>
+                  <button className={bitDepth === 16 ? 'on' : ''} aria-pressed={bitDepth === 16} disabled={busy} onClick={() => setExportBitDepth(16)}>16 BIT</button>
                 </div>
               ) : format === 'mp3' ? (
                 <div className="seg grow" role="group" aria-label="Bitrate">
-                  <button className={mp3Kbps === 320 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(320)}>320K</button>
-                  <button className={mp3Kbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(256)}>256K</button>
-                  <button className={mp3Kbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportMp3Kbps(192)}>192K</button>
+                  <button className={mp3Kbps === 320 ? 'on' : ''} aria-pressed={mp3Kbps === 320} disabled={busy} onClick={() => setExportMp3Kbps(320)}>320K</button>
+                  <button className={mp3Kbps === 256 ? 'on' : ''} aria-pressed={mp3Kbps === 256} disabled={busy} onClick={() => setExportMp3Kbps(256)}>256K</button>
+                  <button className={mp3Kbps === 192 ? 'on' : ''} aria-pressed={mp3Kbps === 192} disabled={busy} onClick={() => setExportMp3Kbps(192)}>192K</button>
                 </div>
               ) : (
                 <div className="seg grow" role="group" aria-label="Bitrate">
-                  <button className={opusKbps === 256 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(256)}>256K</button>
-                  <button className={opusKbps === 192 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(192)}>192K</button>
-                  <button className={opusKbps === 128 ? 'on' : ''} disabled={busy} onClick={() => setExportOpusKbps(128)}>128K</button>
+                  <button className={opusKbps === 256 ? 'on' : ''} aria-pressed={opusKbps === 256} disabled={busy} onClick={() => setExportOpusKbps(256)}>256K</button>
+                  <button className={opusKbps === 192 ? 'on' : ''} aria-pressed={opusKbps === 192} disabled={busy} onClick={() => setExportOpusKbps(192)}>192K</button>
+                  <button className={opusKbps === 128 ? 'on' : ''} aria-pressed={opusKbps === 128} disabled={busy} onClick={() => setExportOpusKbps(128)}>128K</button>
                 </div>
               )}
             </div>
@@ -172,8 +184,8 @@ export function ExportDialog() {
 
         {stats && (
           <div className="statgrid">
-            <StatRow label="INTEGRATED" value={`${stats.integratedLufs.toFixed(2)} LUFS`} />
-            <StatRow label="TRUE PEAK" value={`${stats.truePeakDb.toFixed(2)} dBTP`} />
+            <StatRow label="INTEGRATED" value={lufsText(stats.integratedLufs, 2)} />
+            <StatRow label="TRUE PEAK" value={dbtpText(stats.truePeakDb, 2)} />
             <StatRow label="LIMITER GR MAX" value={`${stats.limiterMaxGrDb.toFixed(1)} dB`} />
             <StatRow label="GAIN SOLVED" value={`${stats.appliedGainDb >= 0 ? '+' : ''}${stats.appliedGainDb.toFixed(2)} dB`} />
             <StatRow
@@ -185,7 +197,7 @@ export function ExportDialog() {
               }
             />
             <StatRow label="SIZE" value={`${(stats.bytes / (1024 * 1024)).toFixed(1)} MB`} />
-            {savedTo && <StatRow label="SAVED" value={savedTo} />}
+            {savedTo && <StatRow label="SAVED" value={savedTo} path />}
             {extrasSaved.map((p, i) => (
               <StatRow key={p} label={i === 0 ? 'ALSO SAVED' : ''} value={p.split(/[\\/]/).pop() ?? p} />
             ))}
@@ -209,11 +221,11 @@ export function ExportDialog() {
             ) : (
               <>
                 <div className="seg">
-                  <button className={audition.mode === 'codec' ? 'on' : ''}
+                  <button className={audition.mode === 'codec' ? 'on' : ''} aria-pressed={audition.mode === 'codec'}
                     onClick={() => setAuditionMode('codec')}>
                     {format.toUpperCase()} {format === 'mp3' ? mp3Kbps : opusKbps}
                   </button>
-                  <button className={audition.mode === 'master' ? 'on' : ''}
+                  <button className={audition.mode === 'master' ? 'on' : ''} aria-pressed={audition.mode === 'master'}
                     onClick={() => setAuditionMode('master')}>MASTER</button>
                 </div>
                 <button className="btn btn-sm btn-ghost" onClick={stopAudition}>■ STOP</button>
@@ -239,7 +251,7 @@ export function ExportDialog() {
                   </span>
                   <span className="leader" />
                   <span className="spec-value" style={{ fontSize: 10.5 }}>
-                    {h.format.toUpperCase()} · {h.lufs.toFixed(1)} LUFS · {(h.bytes / (1024 * 1024)).toFixed(1)} MB
+                    {h.format.toUpperCase()} · {lufsText(h.lufs)} · {(h.bytes / (1024 * 1024)).toFixed(1)} MB
                   </span>
                   {h.path && (window as any).jmaster?.showInFolder && (
                     <button className="btn btn-sm btn-ghost" style={{ height: 20, padding: '0 6px', fontSize: 10 }}
@@ -273,13 +285,18 @@ export function ExportDialog() {
   );
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatRow({ label, value, path = false }: { label: string; value: string; path?: boolean }) {
   return (
     <div className="row">
       <span className="spec">{label}</span>
       <span className="leader" />
-      <span className="spec-value" title={value}
-        style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+      {path ? (
+        // A long path keeps its end, the file name, in view.
+        <span className="spec-value path-tail" title={value} style={{ maxWidth: 320 }}><bdi>{value}</bdi></span>
+      ) : (
+        <span className="spec-value" title={value}
+          style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+      )}
     </div>
   );
 }

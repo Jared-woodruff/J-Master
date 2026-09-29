@@ -67,7 +67,7 @@ export function PresetRack() {
     return (
       <div key={p.id} className={`presetrow ${isModified ? 'modified' : ''}`}>
         <button
-          className={`preset ${on ? 'on' : ''}`}
+          className={`preset ${on ? 'on' : ''}`} aria-pressed={on}
           onClick={() => applyPreset(p.id)}
           title={`${p.name} · ${isModified ? 'modified, click to go back to it' : p.spec} · ${p.targetLufs} LUFS`}
         >

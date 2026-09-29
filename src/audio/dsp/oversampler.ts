@@ -6,11 +6,16 @@
 // Polyphase split by index parity gives:
 //   E branch (even indices): 16 non-zero taps — a real FIR.
 //   O branch (odd indices): all zero except the centre h[15] = 0.5 — a pure delay.
+// The delay differs by direction. Interpolating, output 2j+1 takes input
+// j − 7 (2j + 1 − 15 = 2(j − 7)). Decimating, output j takes the odd input
+// at 2j − 15 = 2(j − 8) + 1: pair j − 8. With 7 there, the centre tap sat
+// two samples early and each stage rolled the top octave off like cos(ω).
 
 const TAPS = 31;
 const M = (TAPS - 1) / 2; // 15
 const EV = 16;            // number of even-index taps
-const ODD_DELAY = 7;      // (15 - 1) / 2 — centre tap position within the odd branch
+const UP_ODD_DELAY = 7;   // (M − 1) / 2, in input samples
+const DOWN_ODD_DELAY = 8; // (M + 1) / 2, in input pairs
 
 function designEvenTaps(): Float64Array {
   const h = new Float64Array(TAPS);
@@ -50,7 +55,7 @@ class Halfband2xUp {
       acc += HE[k] * hist[(this.pos - k + EV) % EV];
     }
     out[o] = 2 * acc;                                   // even phase: FIR branch
-    out[o + 1] = hist[(this.pos - ODD_DELAY + EV) % EV]; // odd phase: 2 · 0.5 · delay
+    out[o + 1] = hist[(this.pos - UP_ODD_DELAY + EV) % EV]; // odd phase: 2 · 0.5 · delay
     this.pos = (this.pos + 1) % EV;
   }
 }
@@ -71,7 +76,7 @@ class Halfband2xDown {
     for (let k = 0; k < EV; k++) {
       acc += HE[k] * histE[(this.pos - k + EV) % EV];
     }
-    acc += 0.5 * histO[(this.pos - ODD_DELAY + EV) % EV];
+    acc += 0.5 * histO[(this.pos - DOWN_ODD_DELAY + EV) % EV];
     this.pos = (this.pos + 1) % EV;
     return acc;
   }

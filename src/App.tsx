@@ -17,6 +17,29 @@ import { EmptyState } from './components/EmptyState';
 import { KeysDialog } from './components/KeysDialog';
 import { FileDrop } from './components/FileDrop';
 import { Tooltip } from './components/Tooltip';
+import { pickAndLoadFile } from './lib/filepick';
+
+type State = ReturnType<typeof useStore.getState>;
+
+const anySheetOpen = (s: State) =>
+  s.keysOpen || s.albumOpen || !!s.masterItReport || s.matchOpen || s.diagOpen || s.batchOpen || s.exportOpen;
+
+/**
+ * Esc closes the sheet on top (the last one rendered), with the same guard
+ * as a click on its scrim: nothing closes mid-render. True if a sheet was
+ * open, so the key is spent either way.
+ */
+function closeTopSheet(s: State): boolean {
+  if (s.keysOpen) s.openKeys(false);
+  else if (s.albumOpen) { if (s.albumAssembling === null) s.openAlbum(false); }
+  else if (s.masterItReport) s.closeMasterItReport();
+  else if (s.matchOpen) { if (!s.matchLoading) s.openMatch(false); }
+  else if (s.diagOpen) s.openDiag(false);
+  else if (s.batchOpen) { if (!s.batchRunning) s.openBatch(false); }
+  else if (s.exportOpen) { if (s.exporting === null) s.openExport(false); }
+  else return false;
+  return true;
+}
 
 export function App() {
   const loaded = useStore((s) => s.loaded);
@@ -25,7 +48,8 @@ export function App() {
 
   // Space = play/pause, Home = start, ←/→ = seek 5 s (Shift = 30 s),
   // L = loop section, R = reference, A = A/B slot, E = export, ? = keys,
-  // Ctrl+S/O = save/open project, Ctrl+Z/Y = undo/redo.
+  // Esc = close the open sheet, Ctrl+S/O = save/open project,
+  // Ctrl+Z/Y = undo/redo.
   useEffect(() => {
     // R: tap toggles the reference; holding it makes the compare momentary.
     let rDownAt = 0;
@@ -38,24 +62,41 @@ export function App() {
     };
     const onKey = (e: KeyboardEvent) => {
       const s = useStore.getState();
+      const el = e.target as HTMLElement;
+      const tag = el?.tagName;
+      const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || !!el?.isContentEditable;
+      if (e.key === 'Escape' && !e.isComposing) {
+        if (closeTopSheet(s)) e.preventDefault();
+        return;
+      }
       if (e.ctrlKey || e.metaKey) {
         const k = e.key.toLowerCase();
         if (k === 's') { e.preventDefault(); void s.saveProject(); return; }
-        if (k === 'o') { e.preventDefault(); void import('./lib/filepick').then((m) => m.pickAndLoadFile()); return; }
+        if (k === 'o') { e.preventDefault(); void pickAndLoadFile(); return; }
+        // In a text field these are the field's own undo and redo.
+        if (typing) return;
         if (k === 'z' && e.shiftKey) { e.preventDefault(); s.redo(); return; }
         if (k === 'z') { e.preventDefault(); s.undo(); return; }
         if (k === 'y') { e.preventDefault(); s.redo(); return; }
+        // Every other shortcut is a bare key: Ctrl+A is not A.
+        return;
       }
-      const el = e.target as HTMLElement;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-      // Focused knobs own the arrow keys.
-      const knobFocused = el?.getAttribute?.('role') === 'slider';
+      if (e.altKey || typing) return;
+      const sheet = anySheetOpen(s);
       if (e.code === 'Space') {
+        // A button reached with Tab inside a sheet takes Space itself.
+        if (sheet && tag === 'BUTTON' && el.closest('.dialog')) return;
         e.preventDefault();
         s.togglePlay();
-      } else if (e.code === 'Home') {
-        s.seekSec(0);
+        return;
+      }
+      if (e.key === '?') { s.openKeys(!s.keysOpen); return; }
+      // Behind an open sheet the console keys rest.
+      if (sheet) return;
+      // Focused knobs own the arrow keys and Home.
+      const knobFocused = el?.getAttribute?.('role') === 'slider';
+      if (e.code === 'Home') {
+        if (!knobFocused) s.seekSec(0);
       } else if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && !knobFocused) {
         if (!s.loaded) return;
         e.preventDefault();
@@ -74,8 +115,6 @@ export function App() {
         if (s.loaded) s.switchSlot(s.activeSlot === 'A' ? 'B' : 'A');
       } else if (e.key === 'e' || e.key === 'E') {
         if (s.loaded) s.openExport(true);
-      } else if (e.key === '?') {
-        s.openKeys(!s.keysOpen);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -90,14 +129,19 @@ export function App() {
   useEffect(() => {
     const bridge = (window as any).jmaster;
     if (!bridge?.onOpenPath || !bridge?.readFileByPath) return;
-    bridge.onOpenPath((path: string) => {
+    return bridge.onOpenPath((path: string) => {
       const name = path.split(/[\\/]/).pop() ?? 'project.jmaster';
       void useStore.getState().loadFile(bridge.readFileByPath(path), name, path);
     });
   }, []);
 
+  // While a sheet is up, the console behind it is out of reach: no Tab
+  // stops, no clicks, nothing for a screen reader to wander into.
+  const sheetOpen = useStore(anySheetOpen);
+
   return (
     <div className="app">
+      <div className="shell" inert={sheetOpen}>
       <TitleBar />
       {loaded ? (
         <main className="workspace">
@@ -118,13 +162,14 @@ export function App() {
         <span className="grow" />
         <span className="spec hide-narrow">ENGINE 48K / 32-BIT FLOAT</span>
         <div className="theme-switch">
-          <button onClick={() => useStore.getState().openKeys(true)} title="Keyboard shortcuts (?)">KEYS</button>
+          <button onClick={() => useStore.getState().openKeys(true)} title="Keyboard shortcuts · ?">KEYS</button>
         </div>
         <div className="theme-switch" role="group" aria-label="Theme">
-          <button className={theme === 'plate' ? 'on' : ''} onClick={() => setTheme('plate')}>PLATE</button>
-          <button className={theme === 'paper' ? 'on' : ''} onClick={() => setTheme('paper')}>PAPER</button>
+          <button className={theme === 'plate' ? 'on' : ''} aria-pressed={theme === 'plate'} onClick={() => setTheme('plate')}>PLATE</button>
+          <button className={theme === 'paper' ? 'on' : ''} aria-pressed={theme === 'paper'} onClick={() => setTheme('paper')}>PAPER</button>
         </div>
       </footer>
+      </div>
       <ExportDialog />
       <BatchDialog />
       <DiagDialog />

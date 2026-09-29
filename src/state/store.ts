@@ -29,6 +29,7 @@ export interface ConsoleSnapshot {
   matchEqGains?: number[];
   advEq?: AdvEqBand[];
   stems?: { bass: number; drums: number; vocal: number; air: number };
+  bassMono?: boolean;
 }
 
 /** Everything undo/redo and project files consider "the console". */
@@ -273,22 +274,42 @@ async function openProject(
     const proj = JSON.parse(jsonText) as ProjectFile;
     if (proj.app !== 'J-Master') throw new Error('not a J-Master project');
     const bridge = (window as any).jmaster;
+    const projConsole = cleanConsole(proj.console, captureConsole(get()));
+    const track = proj.track && typeof proj.track.name === 'string'
+      ? { name: proj.track.name, path: typeof proj.track.path === 'string' ? proj.track.path : null }
+      : null;
     // Audio first, so loadFile's per-track resets don't clobber the console.
-    if (proj.track?.path && bridge?.readFileByPath) {
+    pendingProject = null;
+    let trackLoaded = false;
+    if (track?.path && bridge?.readFileByPath) {
       try {
-        const bytes: ArrayBuffer = await bridge.readFileByPath(proj.track.path);
+        const bytes: ArrayBuffer = await bridge.readFileByPath(track.path);
         suppressDiagOnce = true;
-        await get().loadFile(bytes, proj.track.name, proj.track.path);
+        await get().loadFile(bytes, track.name, track.path);
+        trackLoaded = get().trackPath === track.path;
       } catch {
-        get().pushToast(`AUDIO NOT FOUND · ${proj.track.name.toUpperCase()} · LOAD IT MANUALLY`, 'fault');
+        get().pushToast(`AUDIO NOT FOUND · ${track.name.toUpperCase()} · LOAD IT MANUALLY`, 'fault');
+      } finally {
+        // The load may have failed or been overtaken before using it.
+        suppressDiagOnce = false;
       }
-    } else if (proj.track) {
-      get().pushToast(`LOAD ${proj.track.name.toUpperCase()} MANUALLY TO CONTINUE`, 'info');
+    } else if (track) {
+      get().pushToast(`LOAD ${track.name.toUpperCase()} MANUALLY TO CONTINUE`, 'info');
     }
+    // Until its track is loaded, the project keeps that track (a save
+    // still names it) and its per-track corrections for when it arrives.
+    if (track && !trackLoaded) {
+      pendingProject = { track, balanceDb: projConsole.balanceDb, bassMono: projConsole.bassMono };
+    }
+    const fmt = proj.export?.format;
+    const batchDir = typeof proj.batch?.dir === 'string' && !/^[\\/]{2}/.test(proj.batch.dir) ? proj.batch.dir : null;
     set({
-      snapshots: proj.snapshots ?? { A: null, B: null },
-      activeSlot: proj.activeSlot ?? 'A',
-      meta: proj.meta ?? get().meta,
+      snapshots: {
+        A: cleanSnapshot(proj.snapshots?.A, projConsole),
+        B: cleanSnapshot(proj.snapshots?.B, projConsole),
+      },
+      activeSlot: proj.activeSlot === 'B' ? 'B' : 'A',
+      meta: { ...get().meta, ...cleanMeta(proj.meta) },
       coverArt: proj.cover
         ? {
             mime: proj.cover.mime, name: proj.cover.name,
@@ -296,20 +317,31 @@ async function openProject(
             data: b64ToBytes(proj.cover.b64),
           }
         : null,
-      exportFormat: proj.export?.format ?? 'wav',
-      exportBitDepth: proj.export?.bitDepth ?? 24,
-      exportMp3Kbps: proj.export?.mp3Kbps ?? 320,
-      exportOpusKbps: proj.export?.opusKbps ?? 192,
-      batchDir: proj.batch?.dir ?? get().batchDir,
+      exportFormat: fmt === 'flac' || fmt === 'mp3' || fmt === 'opus' ? fmt : 'wav',
+      exportBitDepth: proj.export?.bitDepth === 16 ? 16 : 24,
+      exportMp3Kbps: ([192, 256, 320] as const).find((k) => k === proj.export?.mp3Kbps) ?? 320,
+      exportOpusKbps: ([128, 192, 256] as const).find((k) => k === proj.export?.opusKbps) ?? 192,
+      // A network folder from a shared file is never written to unasked.
+      batchDir: batchDir ?? get().batchDir,
     });
-    applyConsole(proj.console, set, get);
+    const half = get().source ? get().source!.durationSec / 2 : Infinity;
+    applyConsole({
+      ...projConsole,
+      fadeInSec: Math.min(projConsole.fadeInSec, half),
+      fadeOutSec: Math.min(projConsole.fadeOutSec, half),
+    }, set, get);
     batchSources.clear();
     const items: BatchItem[] = [];
-    for (const it of proj.batch?.items ?? []) {
-      if (!it.path) continue;
+    for (const it of Array.isArray(proj.batch?.items) ? proj.batch.items : []) {
+      if (typeof it?.path !== 'string' || typeof it.name !== 'string') continue;
       const id = batchSeq++;
       batchSources.set(id, { path: it.path });
-      items.push({ id, name: it.name, status: 'pending', pct: 0, phase: '', presetId: it.presetId, isrc: it.isrc });
+      items.push({
+        id, name: it.name, status: 'pending', pct: 0, phase: '',
+        presetId: typeof it.presetId === 'string' ? it.presetId : null,
+        isrc: typeof it.isrc === 'string' ? it.isrc.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) : undefined,
+        ...(typeof it.fixesEnabled === 'boolean' ? { fixesEnabled: it.fixesEnabled } : {}),
+      });
     }
     set({ batchItems: items });
     void scanBatchItems(set as any, get);
@@ -334,6 +366,7 @@ export interface BatchItem {
   /** Background pre-scan results. */
   scanned?: boolean;
   lufs?: number;
+  durationSec?: number;
   balanceOffsetDb?: number;
   fixes?: DiagIssue[];
   fixesEnabled?: boolean;
@@ -349,11 +382,95 @@ const batchSources = new Map<number, { path?: string; file?: File }>();
 let batchSeq = 1;
 let batchCancelled = false;
 
+/**
+ * The console for one batch or album track. The sound (macros, EQ, target,
+ * a per-track preset) carries over; balance and fades are edits to the
+ * loaded track, so every other track starts centred with no fades and
+ * takes only its own diagnosed fixes.
+ */
+function trackParams(s: JMasterState, base: ChainParams, item: BatchItem): ChainParams {
+  const loaded = !!s.trackPath && batchSources.get(item.id)?.path === s.trackPath;
+  let p: ChainParams = loaded ? { ...base } : { ...base, balanceDb: 0, fadeInSec: 0, fadeOutSec: 0 };
+  const override = findPreset(s, item.presetId);
+  if (override) {
+    p = { ...p, ...override.macros, targetLufs: override.targetLufs, ceilingDb: override.ceilingDb };
+  }
+  if (item.fixesEnabled && item.fixes && item.fixes.length > 0) {
+    for (const fix of item.fixes) {
+      switch (fix.action.type) {
+        case 'bassMono': p.bassMono = true; break;
+        case 'width': p.width = Math.min(p.width, fix.action.value); break;
+        case 'smooth': p.smooth = Math.max(p.smooth, fix.action.value); break;
+        case 'balance': p.balanceDb = Math.max(-3, Math.min(3, -(item.balanceOffsetDb ?? 0))); break;
+      }
+    }
+  }
+  return p;
+}
+
+// ── CD image text ─────────────────────────────────────────────────────────
+/**
+ * Text for a CUE sheet: CD-TEXT is Latin-1, so other characters fold to
+ * their base letter (or "?"); a CUE can't escape a quote, so quotes become
+ * apostrophes; one line, at most 80 characters.
+ */
+function cueText(t: string): string {
+  let out = '';
+  for (const ch of t.normalize('NFC')) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x20 || c === 0x7f) continue;
+    if ('"“”„‘’'.includes(ch)) out += "'";
+    else if (ch === '–' || ch === '—') out += '-';
+    else if (ch === '…') out += '...';
+    else if (c <= 0xff) out += ch;
+    else {
+      const base = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      out += base.length === 1 && base.charCodeAt(0) <= 0xff ? base : '?';
+    }
+  }
+  return out.trim().slice(0, 80);
+}
+
+/** A file name every burning tool can find: plain ASCII. */
+function asciiFileName(t: string): string {
+  return t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[–—]/g, '-')
+    .replace(/[^\x20-\x7e]/g, '_').replace(/[<>:"/\\|?*]/g, '_').trim() || 'Album';
+}
+
+/** Latin-1 bytes of text already folded by `cueText`. */
+function latin1(t: string): ArrayBuffer {
+  const b = new Uint8Array(t.length);
+  for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i) & 0xff;
+  return b.buffer;
+}
+
+/** The 13-digit barcode for a UPC-A (12) or EAN-13 code; null when its check digit fails. */
+export function ean13(code: string): string | null {
+  const d = code.length === 12 ? `0${code}` : code;
+  if (!/^\d{13}$/.test(d)) return null;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Number(d[i]) * (i % 2 ? 3 : 1);
+  return (10 - (sum % 10)) % 10 === Number(d[12]) ? d : null;
+}
+
+/** CC-XXX-YY-NNNNN, written without the hyphens. */
+export const ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
+
+/** The Red Book's limits: 99 tracks, 4 s each at least, 79:57 in all. */
+const CD_MAX_TRACKS = 99;
+const CD_MIN_TRACK_SEC = 4;
+const CD_MAX_SEC = 79 * 60 + 57;
+
 export function masterFileName(sourceName: string, encode: EncodeOptions): string {
   const base = sourceName.replace(/\.[^.]+$/, '');
   if (encode.format === 'mp3') return `${base} — Master ${encode.mp3Kbps}.mp3`;
   if (encode.format === 'opus') return `${base} — Master OPUS${encode.opusKbps ?? 192}.opus`;
   return `${base} — Master 48k${encode.bitDepth}.${encode.format}`;
+}
+
+/** `name` ending in the format's own extension, whatever was typed. */
+export function withFormatExt(name: string, format: ExportFormat): string {
+  return `${name.trim().replace(/\.(wav|flac|mp3|opus|ogg)$/i, '')}.${format}`;
 }
 
 /**
@@ -392,7 +509,7 @@ interface ProjectFile {
   activeSlot: 'A' | 'B';
   meta: JMasterState['meta'];
   export: { format: ExportFormat; bitDepth: 16 | 24; mp3Kbps: 192 | 256 | 320; opusKbps: 128 | 192 | 256 };
-  batch: { dir: string | null; items: { name: string; path: string | null; presetId: string | null; isrc?: string }[] };
+  batch: { dir: string | null; items: { name: string; path: string | null; presetId: string | null; isrc?: string; fixesEnabled?: boolean }[] };
   cover?: { mime: string; name: string; width: number; height: number; b64: string } | null;
 }
 
@@ -413,6 +530,27 @@ function b64ToBytes(b64: string): Uint8Array {
 
 let suppressDiagOnce = false;
 let loadToken = 0;
+/** A project opened without its audio: what to restore once it's loaded. */
+let pendingProject: { track: { name: string; path: string | null }; balanceDb: number; bassMono: boolean } | null = null;
+
+/** Release tags from a file: strings only, each at most 200 characters. */
+function cleanMeta(raw: unknown): Partial<JMasterState['meta']> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === 'object') {
+    for (const k of ['artist', 'album', 'year', 'genre', 'catalog', 'comment']) {
+      const v = (raw as Record<string, unknown>)[k];
+      if (typeof v === 'string') out[k] = v.slice(0, 200);
+    }
+  }
+  return out;
+}
+/** Bumped by every stop, so an audition still rendering never starts late. */
+let auditionToken = 0;
+
+function stopStaleAudition(get: () => JMasterState): void {
+  const a = get().audition;
+  if (a.active || a.busy) get().stopAudition();
+}
 
 interface JMasterState {
   loaded: boolean;
@@ -466,10 +604,12 @@ interface JMasterState {
   matchOpen: boolean;
   matchRef: {
     name: string; lufs: number; sideRatioDb: number;
+    /** The reference's own spectrum, so the curve can be re-fitted per track. */
+    bands: number[];
     deltaGains: number[]; suggestedWidth: number;
   } | null;
   matchLoading: boolean;
-  masterItReport: { presetName: string; reasons: string[] } | null;
+  masterItReport: { presetName: string; reasons: string[]; genreBefore: string } | null;
   masterItBusy: boolean;
   audition: { active: boolean; mode: 'codec' | 'master'; busy: boolean };
   metronome: boolean;
@@ -583,6 +723,8 @@ interface JMasterState {
   assembleAlbum(): Promise<void>;
   masterIt(): Promise<void>;
   closeMasterItReport(): void;
+  /** UNDO ALL OF IT: the console and the genre tag as they were before AUTO. */
+  undoMasterIt(): void;
   togglePlay(): void;
   stop(): void;
   seekSec(sec: number): void;
@@ -746,16 +888,16 @@ async function scanBatchItems(
         const bytes: ArrayBuffer = src.path
           ? await bridge.readFileByPath(src.path)
           : await src.file!.arrayBuffer();
-        const { l, r } = await engine.decodeOnly(bytes);
+        const { l, r, durationSec } = await engine.decodeOnly(bytes);
         const a = await engine.analyzeBuffers(l, r);
         const { issues } = deriveDiagnosis(a.diagnostics, a.balanceOffsetDb);
         patch(item.id, {
-          scanned: true, phase: '',
-          lufs: a.lufs, balanceOffsetDb: a.balanceOffsetDb,
-          fixes: issues, fixesEnabled: issues.length > 0,
+          scanned: true, phase: '', error: undefined,
+          lufs: a.lufs, durationSec, balanceOffsetDb: a.balanceOffsetDb,
+          fixes: issues, fixesEnabled: (get().batchItems.find((it) => it.id === item.id)?.fixesEnabled ?? true) && issues.length > 0,
         });
       } catch {
-        patch(item.id, { scanned: true, phase: '' });
+        patch(item.id, { scanned: true, phase: '', error: 'CAN’T READ THIS FILE' });
       }
     }
   } finally {
@@ -763,9 +905,63 @@ async function scanBatchItems(
   }
 }
 
+/**
+ * The correction that moves a track's spectrum toward a reference's:
+ * shape only (the mean is removed, loudness is its own axis), lightly
+ * smoothed, on the ten match-EQ centres, capped at ±6 dB; and the width
+ * that brings its side energy level with the reference's.
+ */
+function matchDelta(
+  refBands: ArrayLike<number>, refSideDb: number, src: { bands: ArrayLike<number>; sideRatioDb: number },
+): { deltaGains: number[]; suggestedWidth: number } {
+  const n = refBands.length;
+  const raw = new Array<number>(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) {
+    raw[i] = refBands[i] - src.bands[i];
+    mean += raw[i];
+  }
+  mean /= n;
+  for (let i = 0; i < n; i++) raw[i] -= mean;
+  const smoothed = raw.map((v, i) => (raw[Math.max(0, i - 1)] + 2 * v + raw[Math.min(n - 1, i + 1)]) / 4);
+  const deltaGains = MATCH_EQ_CENTERS.map((f) => {
+    const pos = (Math.log(f / 20) / Math.log(1000)) * n - 0.5;
+    const i0 = Math.max(0, Math.min(n - 1, Math.floor(pos)));
+    const i1 = Math.min(n - 1, i0 + 1);
+    const t = Math.max(0, Math.min(1, pos - i0));
+    return +Math.max(-6, Math.min(6, smoothed[i0] * (1 - t) + smoothed[i1] * t)).toFixed(1);
+  });
+  // Side energy scales with width², so the dB difference / 40 in log10.
+  const suggestedWidth = +Math.max(0.7, Math.min(1.6, Math.pow(10, (refSideDb - src.sideRatioDb) / 40))).toFixed(2);
+  return { deltaGains, suggestedWidth };
+}
+
+/**
+ * A reference stays loaded across tracks, so its curve is re-fitted to the
+ * new one; an applied match takes the new curve (the width stays yours).
+ */
+async function refitMatch(
+  source: SourceInfo, set: (p: Partial<JMasterState>) => void, get: () => JMasterState,
+): Promise<void> {
+  const ref = get().matchRef;
+  if (!ref) return;
+  const src = await engine.requestSourceProfile().catch(() => null);
+  if (!src || get().source !== source || get().matchRef !== ref) return;
+  const fit = matchDelta(ref.bands, ref.sideRatioDb, src);
+  set({ matchRef: { ...ref, ...fit } });
+  if (get().matchEqGains.length > 0) {
+    set({ matchEqGains: [...fit.deltaGains] });
+    pushParams(get);
+    get().pushToast(`MATCH EQ RE-FITTED TO THIS TRACK · ${ref.name.toUpperCase()}`, 'info');
+  }
+}
+
 /** Records the pre-change console state; continuous knob gestures collapse. */
 let historySet: ((p: Partial<JMasterState>) => void) | null = null;
+/** Set while one action (AUTO) makes several changes under a single entry. */
+let historyHeld = false;
 function record(get: () => JMasterState, field: string): void {
+  if (historyHeld) return;
   const now = Date.now();
   const top = undoStack[undoStack.length - 1];
   if (top && top.field === field && now - top.at < GESTURE_MS) {
@@ -776,6 +972,72 @@ function record(get: () => JMasterState, field: string): void {
   if (undoStack.length > HISTORY_MAX) undoStack.shift();
   redoStack.length = 0;
   historySet?.({ undoDepth: undoStack.length, redoDepth: 0 });
+}
+
+// ── values from files ─────────────────────────────────────────────────
+// Projects and saved settings come from disk: an older version, a newer
+// one or a hand-edited file. Every value is checked and clamped before it
+// reaches the chain, so none can arrive undefined, NaN or out of range.
+const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt;
+const MACRO_RANGE: Record<keyof MacroValues, [number, number]> = {
+  tone: [-1, 1], shape: [-1, 1], air: [0, 1], smooth: [0, 1],
+  character: [0, 1], density: [0, 1], impact: [-1, 1], width: [0, 2],
+};
+const FADE_CURVES: FadeCurve[] = ['linear', 'smooth', 'exp', 'log'];
+const EQ_TYPES: AdvEqBand['type'][] = ['lowshelf', 'peak', 'highshelf'];
+
+function cleanMacros(raw: unknown, base: MacroValues): MacroValues {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const out = { ...base };
+  for (const k of Object.keys(MACRO_RANGE) as (keyof MacroValues)[]) {
+    out[k] = num(r[k], MACRO_RANGE[k][0], MACRO_RANGE[k][1], base[k]);
+  }
+  return out;
+}
+
+function cleanSnapshot(raw: unknown, base: ConsoleState): ConsoleSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = cleanConsole(raw, base);
+  return {
+    macros: c.macros, targetLufs: c.targetLufs, ceilingDb: c.ceilingDb, balanceDb: c.balanceDb,
+    presetId: c.presetId, platformId: c.platformId, bassMono: c.bassMono,
+    matchEqGains: c.matchEqGains, advEq: c.advEq, stems: c.stems,
+  };
+}
+
+function cleanConsole(raw: unknown, base: ConsoleState): ConsoleState {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const defaults = defaultAdvEq();
+  const advEq = Array.isArray(r.advEq) && r.advEq.length === defaults.length
+    ? r.advEq.map((b: any, i: number): AdvEqBand => ({
+        on: typeof b?.on === 'boolean' ? b.on : defaults[i].on,
+        type: EQ_TYPES.includes(b?.type) ? b.type : defaults[i].type,
+        freq: num(b?.freq, 20, 20000, defaults[i].freq),
+        gainDb: num(b?.gainDb, -12, 12, 0),
+        q: num(b?.q, 0.3, 8, defaults[i].q),
+      }))
+    : defaults;
+  const stem = (v: unknown) => num(v, -3, 3, 0);
+  const presetId = typeof r.presetId === 'string' && PRESETS.some((p) => p.id === r.presetId) ? r.presetId
+    : typeof r.presetId === 'string' && /^u-[a-z0-9]+$/.test(r.presetId) ? r.presetId : null;
+  return {
+    macros: cleanMacros(r.macros, base.macros),
+    targetLufs: num(r.targetLufs, -24, -6, base.targetLufs),
+    ceilingDb: num(r.ceilingDb, -3, -0.1, base.ceilingDb),
+    balanceDb: num(r.balanceDb, -3, 3, 0),
+    presetId,
+    platformId: typeof r.platformId === 'string' && PLATFORMS.some((p) => p.id === r.platformId) ? r.platformId : null,
+    bassMono: r.bassMono === true,
+    fadeInSec: num(r.fadeInSec, 0, 600, 0),
+    fadeOutSec: num(r.fadeOutSec, 0, 600, 0),
+    fadeInCurve: FADE_CURVES.includes(r.fadeInCurve) ? r.fadeInCurve : base.fadeInCurve,
+    fadeOutCurve: FADE_CURVES.includes(r.fadeOutCurve) ? r.fadeOutCurve : base.fadeOutCurve,
+    matchEqGains: Array.isArray(r.matchEqGains) && r.matchEqGains.length === MATCH_EQ_CENTERS.length
+      ? r.matchEqGains.map((g: unknown) => num(g, -6, 6, 0)) : [],
+    advEq,
+    stems: { bass: stem(r.stems?.bass), drums: stem(r.stems?.drums), vocal: stem(r.stems?.vocal), air: stem(r.stems?.air) },
+  };
 }
 
 function applyConsole(snap: ConsoleState, set: (p: Partial<JMasterState>) => void, get: () => JMasterState): void {
@@ -945,13 +1207,27 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         });
         if (token !== loadToken || !source) return;
         const { issues, checks } = deriveDiagnosis(source.diagnostics, source.balanceOffsetDb);
-        set({
+        // Fades carry over but never past half of the new track.
+        const half = source.durationSec / 2;
+        set((st) => ({
           loaded: true, loading: false, loadingName: null, loadPhase: null, source, trackPath: path,
           playing: false, playheadSec: 0,
-          loopStartSec: null, loopEndSec: null, monitor: 'stereo',
+          loopStartSec: null, loopEndSec: null, monitor: 'stereo', bypass: false, limiterDelta: false,
           tempo: null, balanceDb: 0, bassMono: false, metronome: false,
+          fadeInSec: Math.min(st.fadeInSec, half), fadeOutSec: Math.min(st.fadeOutSec, half),
           diagIssues: issues, diagChecks: checks, diagOpen: false,
-        });
+        }));
+        // Undo belongs to a track: stepping back past a load would bring
+        // the previous track's corrections onto this one.
+        undoStack.length = 0;
+        redoStack.length = 0;
+        set({ undoDepth: 0, redoDepth: 0 });
+        // The track a project was waiting for: its corrections return.
+        if (pendingProject) {
+          set({ balanceDb: pendingProject.balanceDb, bassMono: pendingProject.bassMono });
+          pendingProject = null;
+        }
+        if (get().matchRef) void refitMatch(source, set, get);
         document.title = `${name} · J-Master`;
         if (path) {
           set((st) => ({
@@ -960,6 +1236,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         }
         pushParams(get);
         get().pushToast(`LOADED ${name.toUpperCase()}`, 'run');
+        if (source.repairedSamples > 0) {
+          get().pushToast(`${source.repairedSamples} BROKEN SAMPLES (NaN/∞) IN THE FILE · SILENCED`, 'warn');
+        }
         const skipDiag = suppressDiagOnce;
         suppressDiagOnce = false;
         if (issues.length > 0 && !skipDiag) {
@@ -1026,34 +1305,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         const { l, r } = await engine.decodeOnly(bytes);
         const ref = await engine.profileBuffers(l, r);
         if (!src) throw new Error('no source profile');
-        // Shape-only delta: remove the mean so loudness stays a separate axis.
-        const raw = new Array(ref.bands.length);
-        let mean = 0;
-        for (let i = 0; i < ref.bands.length; i++) {
-          raw[i] = ref.bands[i] - src.bands[i];
-          mean += raw[i];
-        }
-        mean /= raw.length;
-        for (let i = 0; i < raw.length; i++) raw[i] -= mean;
-        // Light smoothing across neighbours.
-        const smoothed = raw.map((v, i) => {
-          const a = raw[Math.max(0, i - 1)], b = raw[Math.min(raw.length - 1, i + 1)];
-          return (a + 2 * v + b) / 4;
-        });
-        // Resample the 30 profile bands onto the 10 match-EQ centres, cap ±6.
-        const deltaGains = MATCH_EQ_CENTERS.map((f) => {
-          const pos = (Math.log(f / 20) / Math.log(1000)) * smoothed.length - 0.5;
-          const i0 = Math.max(0, Math.min(smoothed.length - 1, Math.floor(pos)));
-          const i1 = Math.min(smoothed.length - 1, i0 + 1);
-          const t = Math.max(0, Math.min(1, pos - i0));
-          const v = smoothed[i0] * (1 - t) + smoothed[i1] * t;
-          return +Math.max(-6, Math.min(6, v)).toFixed(1);
-        });
-        // Width: side energy scales with width², so dB diff / 40 in log10.
-        const suggestedWidth = +Math.max(0.7, Math.min(1.6,
-          Math.pow(10, (ref.sideRatioDb - src.sideRatioDb) / 40))).toFixed(2);
+        const bands = Array.from(ref.bands);
         set({
-          matchRef: { name, lufs: ref.lufs, sideRatioDb: ref.sideRatioDb, deltaGains, suggestedWidth },
+          matchRef: { name, lufs: ref.lufs, sideRatioDb: ref.sideRatioDb, bands, ...matchDelta(bands, ref.sideRatioDb, src) },
           matchLoading: false,
         });
       } catch (err) {
@@ -1118,6 +1372,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       if (s.exportFormat !== 'mp3' && s.exportFormat !== 'opus') return;
       const excerpt = engine.getExcerpt();
       if (!excerpt || !s.source) return;
+      const token = ++auditionToken;
       set({ audition: { active: false, mode: 'codec', busy: true } });
       try {
         const params = { ...chainParamsFrom(s), fadeInSec: 0, fadeOutSec: 0 };
@@ -1131,9 +1386,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           encodeOptionsFrom(s));
         const masterBuf = await engine.decodeToBuffer(wav.data);
         const codecBuf = await engine.decodeToBuffer(codec.data);
+        // Closed, stopped or re-set while rendering: that audition is stale.
+        if (token !== auditionToken) return;
         await engine.auditionStart(masterBuf, codecBuf);
+        if (token !== auditionToken) { engine.auditionStop(); return; }
         set({ audition: { active: true, mode: 'codec', busy: false } });
       } catch {
+        if (token !== auditionToken) return;
         set({ audition: { active: false, mode: 'codec', busy: false } });
         get().pushToast('AUDITION FAILED', 'fault');
       }
@@ -1145,6 +1404,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     },
 
     stopAudition() {
+      auditionToken++;
       engine.auditionStop();
       set({ audition: { active: false, mode: 'codec', busy: false } });
     },
@@ -1200,8 +1460,32 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       const gapFrames = Math.round(s.albumGapSec * 75);
       const FRAME_SAMPLES = 588;
 
+      // A disc that can't be burned is caught before the long render.
+      if (items.length > CD_MAX_TRACKS) {
+        get().pushToast(`A CD HOLDS ${CD_MAX_TRACKS} TRACKS · THIS ALBUM HAS ${items.length}`, 'fault');
+        return;
+      }
+      if (items.every((it) => it.durationSec !== undefined)) {
+        const short = items.filter((it) => it.durationSec! < CD_MIN_TRACK_SEC).length;
+        if (short > 0) {
+          get().pushToast(`CD TRACKS RUN ${CD_MIN_TRACK_SEC} S AT LEAST · ${short} TOO SHORT`, 'fault');
+          return;
+        }
+        const total = items.reduce((a, it) => a + it.durationSec!, 0) + s.albumGapSec * (items.length - 1);
+        if (total > CD_MAX_SEC) {
+          get().pushToast(`${mmss(total)} WON’T FIT ON A CD · 79:57 AT MOST`, 'fault');
+          return;
+        }
+      }
+      const upc = s.albumUpc ? ean13(s.albumUpc) : null;
+      const dropped: string[] = [];
+      if (s.albumUpc && !upc) dropped.push('BARCODE');
+
       const setPhase = (phase: string, pct: number) => set({ albumAssembling: { phase, pct } });
       setPhase('STARTING', 0);
+      // The image is written beside its final name and only takes it once
+      // complete, so a failed run leaves the last good image in place.
+      let partial: string | null = null;
       try {
         // WAV header placeholder — sizes patched at the end.
         const header = new ArrayBuffer(44);
@@ -1214,7 +1498,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           v.setUint16(32, 4, true); v.setUint16(34, 16, true);
           ws(36, 'data'); v.setUint32(40, 0, true);
         }
-        const imagePath: string = await bridge.writeFileNew(dir, `${albumTitle} — CD Image.wav`, header);
+        const fileBase = asciiFileName(albumTitle);
+        partial = (await bridge.writeFileNew(dir, `${fileBase} - CD Image.wav.partial`, header)) as string;
+        const imagePart = partial;
 
         let totalSamples = 0;
         const cueTracks: { title: string; isrc?: string; startFrame: number; lengthSec: number }[] = [];
@@ -1230,23 +1516,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             : await src.file!.arrayBuffer();
           const { l, r, durationSec } = await engine.decodeOnly(bytes);
           const lufs = item.lufs ?? (await engine.measureLufs(l, r));
-
-          let itemParams = params;
-          const override = findPreset(get(), item.presetId);
-          if (override) {
-            itemParams = { ...params, ...override.macros, targetLufs: override.targetLufs, ceilingDb: override.ceilingDb };
-          }
-          if (item.fixesEnabled && item.fixes && item.fixes.length > 0) {
-            itemParams = { ...itemParams };
-            for (const fix of item.fixes) {
-              switch (fix.action.type) {
-                case 'bassMono': itemParams.bassMono = true; break;
-                case 'width': itemParams.width = Math.min(itemParams.width, fix.action.value); break;
-                case 'smooth': itemParams.smooth = Math.max(itemParams.smooth, fix.action.value); break;
-                case 'balance': itemParams.balanceDb = Math.max(-3, Math.min(3, -(item.balanceOffsetDb ?? 0))); break;
-              }
-            }
-          }
+          const itemParams = trackParams(get(), params, item);
           const rendered = await engine.renderBuffers(
             l, r, itemParams, lufs, durationSec,
             { format: 'wav', bitDepth: 24, mp3Kbps: 320 },
@@ -1279,11 +1549,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           });
           // Stream to disk in 4 MB slices to bound memory.
           for (let off = 0; off < pcm.byteLength; off += 4 << 20) {
-            await bridge.appendFile(imagePath, pcm.slice(off, Math.min(pcm.byteLength, off + (4 << 20))));
+            await bridge.appendFile(imagePart, pcm.slice(off, Math.min(pcm.byteLength, off + (4 << 20))));
           }
           totalSamples += padded;
           if (idx < items.length - 1 && gapFrames > 0) {
-            await bridge.appendFile(imagePath, new ArrayBuffer(gapFrames * FRAME_SAMPLES * 4));
+            await bridge.appendFile(imagePart, new ArrayBuffer(gapFrames * FRAME_SAMPLES * 4));
             totalSamples += gapFrames * FRAME_SAMPLES;
           }
         }
@@ -1293,10 +1563,12 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         const dataSize = totalSamples * 4;
         const riff = new ArrayBuffer(4);
         new DataView(riff).setUint32(0, 36 + dataSize, true);
-        await bridge.patchFile(imagePath, 4, riff);
+        await bridge.patchFile(imagePart, 4, riff);
         const dsz = new ArrayBuffer(4);
         new DataView(dsz).setUint32(0, dataSize, true);
-        await bridge.patchFile(imagePath, 40, dsz);
+        await bridge.patchFile(imagePart, 40, dsz);
+        const imagePath: string = await bridge.commitFile(imagePart);
+        partial = null;
 
         // CUE sheet with CD-TEXT.
         const mmssff = (frame: number) => {
@@ -1307,37 +1579,45 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}:${String(ff).padStart(2, '0')}`;
         };
         const imageFile = imagePath.split(/[\\/]/).pop()!;
+        const validIsrc = (t: { isrc?: string }) => !!t.isrc && ISRC_RE.test(t.isrc);
+        const badIsrc = cueTracks.filter((t) => t.isrc && !validIsrc(t)).length;
+        if (badIsrc > 0) dropped.push(`${badIsrc} ISRC${badIsrc > 1 ? 'S' : ''}`);
         let cue = '';
-        if (s.albumUpc.length === 13) cue += `CATALOG ${s.albumUpc}\n`;
-        cue += `TITLE "${albumTitle}"\nPERFORMER "${performer}"\nFILE "${imageFile}" WAVE\n`;
+        if (upc) cue += `CATALOG ${upc}\r\n`;
+        cue += `TITLE "${cueText(albumTitle)}"\r\nPERFORMER "${cueText(performer)}"\r\nFILE "${imageFile}" WAVE\r\n`;
         cueTracks.forEach((t, i) => {
-          cue += `  TRACK ${String(i + 1).padStart(2, '0')} AUDIO\n`;
-          cue += `    TITLE "${t.title}"\n`;
-          cue += `    PERFORMER "${performer}"\n`;
-          if (t.isrc && t.isrc.length === 12) cue += `    ISRC ${t.isrc}\n`;
-          cue += `    INDEX 01 ${mmssff(t.startFrame)}\n`;
+          cue += `  TRACK ${String(i + 1).padStart(2, '0')} AUDIO\r\n`;
+          cue += `    TITLE "${cueText(t.title)}"\r\n`;
+          cue += `    PERFORMER "${cueText(performer)}"\r\n`;
+          if (validIsrc(t)) cue += `    ISRC ${t.isrc}\r\n`;
+          cue += `    INDEX 01 ${mmssff(t.startFrame)}\r\n`;
+        });
+        const cuePath: string = await bridge.writeFileNew(dir, `${fileBase}.cue`, latin1(cue));
+
+        // Manifest: what the sheet carries, for the replication plant.
+        let manifest = `${albumTitle} - ${performer}\r\nAssembled by J-Master (JMW Software)\r\n`;
+        manifest += `Image: ${imageFile} · 44.1 kHz / 16-bit · ${(totalSamples / 44100 / 60).toFixed(1)} min\r\n`;
+        if (upc) manifest += `UPC/EAN: ${upc}\r\n`;
+        manifest += `\r\n`;
+        cueTracks.forEach((t, i) => {
+          manifest += `${String(i + 1).padStart(2, '0')}  ${mmssff(t.startFrame)}  ${t.title}${validIsrc(t) ? `  [${t.isrc}]` : ''}\r\n`;
         });
         const enc = new TextEncoder();
-        const cuePath: string = await bridge.writeFileNew(dir, `${albumTitle}.cue`, enc.encode(cue).buffer);
-
-        // Manifest.
-        let manifest = `${albumTitle} — ${performer}\nAssembled by J-Master (JMW Software)\n`;
-        manifest += `Image: ${imageFile} · 44.1 kHz / 16-bit · ${(totalSamples / 44100 / 60).toFixed(1)} min\n`;
-        if (s.albumUpc) manifest += `UPC/EAN: ${s.albumUpc}\n`;
-        manifest += `\n`;
-        cueTracks.forEach((t, i) => {
-          manifest += `${String(i + 1).padStart(2, '0')}  ${mmssff(t.startFrame)}  ${t.title}${t.isrc ? `  [${t.isrc}]` : ''}\n`;
-        });
-        await bridge.writeFileNew(dir, `${albumTitle} — manifest.txt`, enc.encode(manifest).buffer);
+        await bridge.writeFileNew(dir, `${fileBase} - manifest.txt`, enc.encode(`\uFEFF${manifest}`).buffer);
 
         set({
           albumAssembling: null,
           albumResult: { imagePath, cuePath, totalMin: totalSamples / 44100 / 60 },
         });
-        get().pushToast(`CD IMAGE ASSEMBLED · ${cueTracks.length} TRACKS`, 'run');
+        if (dropped.length > 0) {
+          get().pushToast(`CD IMAGE ASSEMBLED · LEFT OUT ${dropped.join(' + ')} (INVALID)`, 'warn');
+        } else {
+          get().pushToast(`CD IMAGE ASSEMBLED · ${cueTracks.length} TRACKS`, 'run');
+        }
       } catch (err) {
+        if (partial) await bridge.discardFile?.(partial).catch(() => undefined);
         set({ albumAssembling: null });
-        get().pushToast(`ASSEMBLY FAILED · ${String(err).slice(0, 60)}`, 'fault');
+        get().pushToast(`ASSEMBLY FAILED · ${fileErrorText(err)}`, 'fault');
       }
     },
 
@@ -1379,23 +1659,29 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           else if (midDb > 1) { presetPick = 'rock'; reasons.push('MID-FORWARD → ROCK'); }
           else { presetPick = 'pop'; reasons.push('NO STRONG SIGNATURE → POP (SAFE)'); }
         } else {
-          reasons.push('NO PROFILE — POP (SAFE)');
+          reasons.push('NO PROFILE · POP (SAFE)');
         }
         const preset = PRESETS.find((p) => p.id === presetPick)!;
+        const genreBefore = get().meta.genre;
+        // One history entry for the whole of AUTO, so UNDO ALL is one undo.
         record(get, 'masterit');
-        get().applyPreset(presetPick);
-        reasons.push(`PRESET ${preset.name} · TARGET ${preset.targetLufs} LUFS`);
-        // Apply every diagnosed fix.
+        historyHeld = true;
         const issues = get().diagIssues;
-        if (issues.length > 0) {
-          set((st) => ({ diagIssues: st.diagIssues.map((i) => ({ ...i, checked: true })) }));
-          get().applyDiagFixes();
-          reasons.push(`FIXES ${issues.map((i) => i.fixLabel).join(' · ')}`);
-        } else {
-          reasons.push('SOURCE CHECKS CLEAN — NO FIXES NEEDED');
+        try {
+          get().applyPreset(presetPick);
+          if (issues.length > 0) {
+            set((st) => ({ diagIssues: st.diagIssues.map((i) => ({ ...i, checked: true })) }));
+            get().applyDiagFixes();
+          }
+        } finally {
+          historyHeld = false;
         }
+        reasons.push(`PRESET ${preset.name} · TARGET ${preset.targetLufs} LUFS`);
+        reasons.push(issues.length > 0
+          ? `FIXES ${issues.map((i) => i.fixLabel).join(' · ')}`
+          : 'SOURCE CHECKS CLEAN · NO FIXES NEEDED');
         if (tempo?.drift) reasons.push('TEMPO DRIFT FLAGGED · NO AUDIO FIX · SEE DIAG');
-        set({ masterItReport: { presetName: preset.name, reasons }, masterItBusy: false });
+        set({ masterItReport: { presetName: preset.name, reasons, genreBefore }, masterItBusy: false });
       } catch {
         set({ masterItBusy: false });
         get().pushToast('AUTO-MASTER FAILED', 'fault');
@@ -1404,6 +1690,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     closeMasterItReport() {
       set({ masterItReport: null });
+    },
+
+    undoMasterIt() {
+      const report = get().masterItReport;
+      if (!report) return;
+      get().undo();
+      set((s) => ({ masterItReport: null, meta: { ...s.meta, genre: report.genreBefore } }));
     },
 
     undo() {
@@ -1613,9 +1906,12 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           case 'bassMono':
             set({ bassMono: true });
             break;
-          case 'width':
-            set((st) => ({ macros: { ...st.macros, width: (issue.action as any).value }, presetId: null }));
+          case 'width': {
+            // Narrow to the suggestion; a width already narrower stays.
+            const w = (issue.action as any).value as number;
+            if (get().macros.width > w) set((st) => ({ macros: { ...st.macros, width: w }, presetId: null }));
             break;
+          }
           case 'balance':
             set({ balanceDb: Math.max(-3, Math.min(3, +(-s.source!.balanceOffsetDb).toFixed(1))) });
             break;
@@ -1638,7 +1934,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     switchSlot(slot) {
       const s = get();
       if (slot === s.activeSlot) return;
-      record(get, 'slot');
+      // The slots are their own memory, outside undo: undoing a switch
+      // would leave the other slot lit over the wrong console. Each holds
+      // the whole sound, EQ drawers and stem trims included.
       const current: ConsoleSnapshot = {
         macros: { ...s.macros },
         targetLufs: s.targetLufs,
@@ -1646,6 +1944,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         balanceDb: s.balanceDb,
         presetId: s.presetId,
         platformId: s.platformId,
+        bassMono: s.bassMono,
+        matchEqGains: [...s.matchEqGains],
+        advEq: s.advEq.map((b) => ({ ...b })),
+        stems: { ...s.stems },
       };
       const incoming = s.snapshots[slot];
       set({
@@ -1660,6 +1962,10 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
               presetId: incoming.presetId,
               ...(incoming.presetId ? { lastPresetId: incoming.presetId } : {}),
               platformId: incoming.platformId,
+              ...(incoming.bassMono !== undefined ? { bassMono: incoming.bassMono } : {}),
+              ...(incoming.matchEqGains ? { matchEqGains: [...incoming.matchEqGains] } : {}),
+              ...(incoming.advEq ? { advEq: incoming.advEq.map((b) => ({ ...b })) } : {}),
+              ...(incoming.stems ? { stems: { ...incoming.stems } } : {}),
             }
           : {}),
       });
@@ -1672,6 +1978,8 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         engine.pause();
         set({ playing: false });
       } else {
+        // One sound at a time: the transport takes over from an audition.
+        if (get().audition.active) get().stopAudition();
         void engine.play();
         set({ playing: true });
       }
@@ -1765,14 +2073,21 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     },
 
     openExport(open) {
+      // Mid-load the engine already holds the new track's samples while the
+      // console still shows the old one's loudness: nothing to export yet.
+      if (open && get().loading) return;
+      // Every way out (CANCEL, DONE, scrim, Esc) ends the codec audition.
+      if (!open) { const a = get().audition; if (a.active || a.busy) get().stopAudition(); }
       set({ exportOpen: open, exportStats: open ? null : get().exportStats, exportSavedTo: null });
       if (!open) set({ exporting: null });
     },
 
-    setExportFormat(format) { set({ exportFormat: format }); },
+    // A running audition compares the codec it was rendered with, so a new
+    // format or bitrate ends it rather than mislabel it.
+    setExportFormat(format) { stopStaleAudition(get); set({ exportFormat: format }); },
     setExportBitDepth(depth) { set({ exportBitDepth: depth }); },
-    setExportMp3Kbps(kbps) { set({ exportMp3Kbps: kbps }); },
-    setExportOpusKbps(kbps) { set({ exportOpusKbps: kbps }); },
+    setExportMp3Kbps(kbps) { stopStaleAudition(get); set({ exportMp3Kbps: kbps }); },
+    setExportOpusKbps(kbps) { stopStaleAudition(get); set({ exportOpusKbps: kbps }); },
 
     async saveProject() {
       const s = get();
@@ -1780,7 +2095,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         app: 'J-Master',
         fileVersion: 1,
         savedAt: new Date().toISOString(),
-        track: s.source ? { name: s.source.name, path: s.trackPath } : null,
+        track: s.source ? { name: s.source.name, path: s.trackPath } : pendingProject?.track ?? null,
         console: captureConsole(s),
         snapshots: s.snapshots,
         activeSlot: s.activeSlot,
@@ -1796,6 +2111,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             path: batchSources.get(it.id)?.path ?? null,
             presetId: it.presetId ?? null,
             isrc: it.isrc,
+            fixesEnabled: it.fixesEnabled,
           })),
         },
         cover: s.coverArt
@@ -1829,20 +2145,29 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     startExport(fileName, title) {
       const s = get();
-      if (!s.loaded || s.exporting) return;
+      if (!s.loaded || s.loading || s.exporting) return;
       set({ exporting: { phase: 'STARTING', pct: 0 }, exportStats: null, exportSavedTo: null, exportExtrasSaved: [] });
       const tags = tagsFrom(s, title);
       const main: EncodeOptions = { ...encodeOptionsFrom(s), tags };
       const extras: EncodeOptions[] = s.exportExtras
         .filter((f) => f !== s.exportFormat)
         .map((f) => ({ ...encodeOptionsFrom(s), format: f, tags }));
+      // A typed name may lack the extension or carry another format's.
+      fileName = withFormatExt(fileName, s.exportFormat);
       engine.startExport(
         chainParamsFrom(s),
         main,
         (p) => set({ exporting: p }),
         async (result) => {
           set({ exporting: { phase: 'SAVING', pct: 0.98 } });
-          const saved = await saveExportFile(result.data, fileName, result.mime);
+          let saved: string | null;
+          try {
+            saved = await saveExportFile(result.data, fileName, result.mime);
+          } catch (err) {
+            set({ exporting: null });
+            get().pushToast(`COULDN'T SAVE THE MASTER · ${fileErrorText(err)}`, 'fault');
+            return;
+          }
           const history: ExportHistoryEntry[] = [];
           const extrasSaved: string[] = [];
           const when = new Date().toISOString();
@@ -1853,12 +2178,14 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
               bytes: result.stats.bytes, lufs: result.stats.integratedLufs,
               truePeakDb: result.stats.truePeakDb, when,
             });
-            // Companions go beside the master; the browser preview downloads them.
+            // Companions go beside the master, named after the file the Save
+            // dialog actually wrote; the browser preview downloads them.
             const dir = isPath ? saved.replace(/[\\/][^\\/]*$/, '') : null;
+            const savedName = isPath ? saved.split(/[\\/]/).pop()! : fileName;
             const bridge = (window as any).jmaster;
             for (const x of result.extras ?? []) {
               const opts = extras.find((e) => e.format === x.format) ?? { ...main, format: x.format as ExportFormat };
-              const name = companionFileName(fileName, s.source!.name, main, opts);
+              const name = companionFileName(savedName, s.source!.name, main, opts);
               try {
                 const where: string | null = dir && bridge?.saveFileTo
                   ? await bridge.saveFileTo(dir, name, x.data)
@@ -1884,6 +2211,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
               : 'EXPORT CANCELLED',
             saved ? 'run' : 'info',
           );
+          if (saved && result.stats.loudnessMeasured === false) {
+            get().pushToast('TOO QUIET TO MEASURE · RENDERED AT UNITY GAIN, NOT THE TARGET', 'warn');
+          }
+        },
+        (message) => {
+          set({ exporting: null });
+          get().pushToast(`RENDER FAILED · ${message.toUpperCase()}`, 'fault');
         },
         extras,
       );
@@ -1940,7 +2274,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       if (on) {
         engine.scheduleProcessedPreview(chainParamsFrom(get()), 100);
       } else {
-        engine.clearProcessedPreview();
+        engine.releasePreview();
       }
     },
 
@@ -1975,7 +2309,17 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
       const s = get();
       if (s.batchRunning || s.batchItems.length === 0) return;
       batchCancelled = false;
+      // Everything already mastered: MASTER ALL means again, with the
+      // console as it is now. Otherwise only what's left (or failed) runs.
+      if (s.batchItems.every((it) => it.status === 'done')) {
+        set({
+          batchItems: s.batchItems.map((it) => ({
+            ...it, status: 'pending' as BatchStatus, pct: 0, phase: '', outLufs: undefined, outPath: undefined, error: undefined,
+          })),
+        });
+      }
       set({ batchRunning: true });
+      let rendered = 0;
       const params = chainParamsFrom(s);
       const encode = encodeOptionsFrom(s);
       const bridge = (window as any).jmaster;
@@ -2013,33 +2357,13 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             idx + 1,
             get().batchItems.length,
           );
-          // Per-track preset override: swap in the preset's macros + targets.
-          let itemParams = params;
+          // A per-track preset also tags the file with its genre.
           const override = findPreset(get(), item.presetId);
           if (override) {
-            itemParams = {
-              ...params,
-              ...override.macros,
-              targetLufs: override.targetLufs,
-              ceilingDb: override.ceilingDb,
-            };
             const genre = override.user ? override.genre : override.id === 'flat' ? undefined : override.genre ?? titleCase(override.name);
             if (genre) trackTags.genre = genre;
           }
-          // Per-track diagnosed fixes from the pre-scan.
-          if (item.fixesEnabled && item.fixes && item.fixes.length > 0) {
-            itemParams = { ...itemParams };
-            for (const fix of item.fixes) {
-              switch (fix.action.type) {
-                case 'bassMono': itemParams.bassMono = true; break;
-                case 'width': itemParams.width = Math.min(itemParams.width, fix.action.value); break;
-                case 'smooth': itemParams.smooth = Math.max(itemParams.smooth, fix.action.value); break;
-                case 'balance':
-                  itemParams.balanceDb = Math.max(-3, Math.min(3, -(item.balanceOffsetDb ?? 0)));
-                  break;
-              }
-            }
-          }
+          const itemParams = trackParams(get(), params, item);
           const result = await engine.renderBuffers(
             l, r, itemParams, lufs, durationSec, { ...encode, tags: trackTags },
             (p) => patch(item.id, { phase: p.phase, pct: 0.15 + p.pct * 0.8 }),
@@ -2054,10 +2378,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             outPath = await saveExportFile(result.data, outName, result.mime);
           }
           patch(item.id, {
-            status: 'done', pct: 1, phase: 'DONE',
+            status: 'done', pct: 1, phase: 'DONE', error: undefined,
             outLufs: result.stats.integratedLufs,
             outPath: outPath ?? undefined,
           });
+          rendered++;
           if (outPath) {
             const entry: ExportHistoryEntry = {
               name: outName,
@@ -2071,14 +2396,15 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             set((s2) => ({ exportHistory: [entry, ...s2.exportHistory].slice(0, 20) }));
           }
         } catch (err) {
-          patch(item.id, { status: 'failed', phase: 'FAILED', error: String(err) });
+          patch(item.id, { status: 'failed', phase: 'FAILED', error: fileErrorText(err) });
         }
       }
       set({ batchRunning: false });
-      const done = get().batchItems.filter((i) => i.status === 'done').length;
+      const failed = get().batchItems.filter((i) => i.status === 'failed').length;
       get().pushToast(
-        batchCancelled ? `BATCH STOPPED · ${done} DONE` : `BATCH COMPLETE · ${done} MASTERED`,
-        batchCancelled ? 'info' : 'run',
+        batchCancelled ? `BATCH STOPPED · ${rendered} MASTERED`
+          : `BATCH COMPLETE · ${rendered} MASTERED${failed ? ` · ${failed} FAILED` : ''}`,
+        batchCancelled ? 'info' : failed ? 'warn' : 'run',
       );
     },
 
@@ -2099,6 +2425,59 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 }, {
   name: 'jmaster-settings',
   version: 1,
+  // Saved settings merge onto today's defaults field by field and are
+  // cleaned like a project: a setting added in a later version never
+  // arrives undefined, and no stored value reaches the chain unchecked.
+  merge: (persisted, current) => {
+    const p = (persisted && typeof persisted === 'object' ? persisted : {}) as Partial<JMasterState>;
+    const base = captureConsole(current);
+    const c = cleanConsole({
+      ...base, macros: p.macros, targetLufs: p.targetLufs, ceilingDb: p.ceilingDb,
+      presetId: p.presetId, platformId: p.platformId,
+    }, base);
+    const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
+    const fmts: ExportFormat[] = ['wav', 'flac', 'mp3', 'opus'];
+    return {
+      ...current,
+      theme: p.theme === 'paper' ? 'paper' : 'plate',
+      waveView: p.waveView === 'spec' ? 'spec' : 'wave',
+      meterView: p.meterView === 'scope' ? 'scope' : 'spectrum',
+      gridEnabled: bool(p.gridEnabled, current.gridEnabled),
+      loudnessLane: bool(p.loudnessLane, current.loudnessLane),
+      tempoLane: bool(p.tempoLane, current.tempoLane),
+      outSplit: bool(p.outSplit, current.outSplit),
+      autoFix: bool(p.autoFix, current.autoFix),
+      recentFiles: (Array.isArray(p.recentFiles) ? p.recentFiles : [])
+        .filter((r) => typeof r?.name === 'string' && typeof r?.path === 'string').slice(0, 6),
+      userPresets: (Array.isArray(p.userPresets) ? p.userPresets : [])
+        .filter((u) => typeof u?.id === 'string' && typeof u?.name === 'string')
+        .map((u) => ({
+          ...u,
+          macros: cleanMacros(u.macros, current.macros),
+          targetLufs: num(u.targetLufs, -24, -6, -14),
+          ceilingDb: num(u.ceilingDb, -3, -0.1, -1),
+        })),
+      lastPresetId: typeof p.lastPresetId === 'string' ? p.lastPresetId : current.lastPresetId,
+      exportExtras: (Array.isArray(p.exportExtras) ? p.exportExtras : []).filter((f) => fmts.includes(f)),
+      activeSlot: p.activeSlot === 'B' ? 'B' : 'A',
+      snapshots: { A: cleanSnapshot(p.snapshots?.A, base), B: cleanSnapshot(p.snapshots?.B, base) },
+      exportHistory: (Array.isArray(p.exportHistory) ? p.exportHistory : [])
+        .filter((h) => typeof h?.name === 'string' && typeof h?.format === 'string').slice(0, 20),
+      albumUpc: typeof p.albumUpc === 'string' ? p.albumUpc.replace(/\D/g, '').slice(0, 13) : '',
+      albumGapSec: num(p.albumGapSec, 0, 5, current.albumGapSec),
+      exportFormat: fmts.includes(p.exportFormat as ExportFormat) ? p.exportFormat! : current.exportFormat,
+      exportBitDepth: p.exportBitDepth === 16 ? 16 : 24,
+      exportMp3Kbps: ([192, 256, 320] as const).find((k) => k === p.exportMp3Kbps) ?? current.exportMp3Kbps,
+      exportOpusKbps: ([128, 192, 256] as const).find((k) => k === p.exportOpusKbps) ?? current.exportOpusKbps,
+      meta: { ...current.meta, ...cleanMeta(p.meta) },
+      macros: c.macros,
+      targetLufs: c.targetLufs,
+      ceilingDb: c.ceilingDb,
+      presetId: c.presetId,
+      platformId: c.platformId,
+      batchDir: typeof p.batchDir === 'string' ? p.batchDir : null,
+    };
+  },
   // Persist preferences and the console; never transport, meters, or dialogs.
   partialize: (s) => ({
     theme: s.theme,
@@ -2140,6 +2519,18 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 engine.onPreviewUpdate = () => {
   useStore.setState({ previewPending: engine.previewPending });
 };
+
+/** Why reading, decoding or saving a file failed, in the status line's words. */
+function fileErrorText(err: unknown): string {
+  const m = String((err as { message?: string })?.message ?? err);
+  if (/network path/i.test(m)) return 'NETWORK PATH · ADD THE FILE AGAIN';
+  if (/EBUSY|resource busy|locked/i.test(m)) return 'THE FILE IS OPEN IN ANOTHER APP';
+  if (/EPERM|EACCES|permission/i.test(m)) return 'NO PERMISSION';
+  if (/ENOSPC/i.test(m)) return 'THE DISK IS FULL';
+  if (/ENOENT|no such file/i.test(m)) return 'FILE OR FOLDER NOT FOUND';
+  if (/decode|EncodingError/i.test(m)) return 'CAN’T DECODE THIS FILE';
+  return m.replace(/^Error invoking remote method '[^']+': /, '').replace(/^\w*Error: /, '').slice(0, 48).toUpperCase();
+}
 
 async function saveExportFile(data: ArrayBuffer, fileName: string, mime: string): Promise<string | null> {
   const bridge = (window as any).jmaster;

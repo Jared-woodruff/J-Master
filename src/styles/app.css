@@ -2,9 +2,13 @@
 
 .app {
   display: grid;
-  grid-template-rows: 40px 1fr 26px;
+  /* minmax(0, …): the middle row takes what's left and scrolls inside,
+     so a tall start screen can't push the status bar off a short window. */
+  grid-template-rows: 40px minmax(0, 1fr) 26px;
   height: 100%;
 }
+/* The console behind an open sheet goes inert; this wrapper adds no box. */
+.shell { display: contents; }
 
 /* title bar */
 .titlebar {
@@ -76,7 +80,7 @@
    is shorter than the waveform + deck minimums. */
 .workspace {
   display: grid;
-  grid-template-rows: auto minmax(140px, 30fr) minmax(280px, 42fr);
+  grid-template-rows: max-content minmax(140px, 30fr) minmax(280px, 42fr);
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -84,7 +88,7 @@
 /* Short screens: the controls outrank waveform height, so the deck takes a
    bigger share and the loudness target stays on screen. */
 @media (max-height: 760px) {
-  .workspace { grid-template-rows: auto minmax(130px, 25fr) minmax(280px, 47fr); }
+  .workspace { grid-template-rows: max-content minmax(130px, 25fr) minmax(280px, 47fr); }
 }
 
 /* status bar */
@@ -112,6 +116,7 @@
   padding: 0 8px;
   color: var(--text-spec);
 }
+.statusbar .theme-switch button:hover:not(.on) { color: var(--text-body); background: var(--surface-inset); }
 .statusbar .theme-switch button.on {
   background: var(--fill-primary);
   color: var(--fill-primary-text);
@@ -280,6 +285,9 @@
   .panel-console { grid-column: 1 / -1; grid-row: 1; border-left: none; }
   .panel-presets { grid-column: 1; grid-row: 2; border-top: 1px solid var(--border-hairline); }
   .panel-meters { grid-column: 2; grid-row: 2; border-top: 1px solid var(--border-hairline); }
+  /* Stacked, the deck needs real height: rather than crush four panels
+     into scroll slits, it keeps its size and the workspace scrolls. */
+  .workspace { grid-template-rows: max-content minmax(130px, 25fr) minmax(460px, 47fr); }
 }
 
 .panel-head {
@@ -469,7 +477,11 @@
   .stemrow .stemhint { display: none; }
 }
 .knobcell .klabel { font-size: 10px; }
-.knobcell .kvalue { font-family: var(--font-mono); font-size: 12px; color: var(--text-body); cursor: text; }
+.knobcell .kvalue {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-body); cursor: text;
+  background: none; border: 0; padding: 0 2px; line-height: inherit;
+}
+.knobcell .kvalue:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 1px; }
 .knobcell .kvalue:hover { color: var(--text-accent); }
 .kvalue-entry {
   width: 56px;
@@ -586,12 +598,22 @@
 .platgrid button:hover { background: var(--surface-inset); color: var(--text-body); }
 .platgrid button.on { background: var(--fill-accent); color: #fff; }
 
-.target-row { display: flex; align-items: center; gap: var(--space-2); justify-content: space-between; }
+/* Each value travels with its own stepper; in a narrow box a whole pair
+   wraps to the next line rather than a unit dropping under its number. */
+.target-row {
+  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+.target-row .tgroup { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.target-row .tval { display: flex; align-items: center; gap: var(--space-2); }
 .target-row .big {
   font-family: var(--font-mono);
   font-size: 18px;
   font-weight: 600;
+  white-space: nowrap;
+  min-width: 3.4em;
 }
+.target-row .spec { white-space: nowrap; }
 
 /* meters: rows never squash; a short column scrolls instead of clipping */
 .meters-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 var(--space-4) var(--space-4); overflow-y: auto; }
@@ -627,9 +649,11 @@
 /* ── empty state ────────────────────────────────────────────────────── */
 .empty {
   display: flex;
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
   padding: var(--space-7);
+  min-height: 0;
+  overflow-y: auto;
 }
 .dropzone {
   width: min(720px, 90%);
@@ -647,8 +671,30 @@
 .dropzone.dragover { border-color: var(--signal-500); }
 .dropzone.dragover.reject { border-color: var(--border-mid); }
 .dropzone .headline { font-size: clamp(28px, 6vw, 40px); }
+/* Spec lines wrap inside the frame rather than run past it. */
+.dropzone > .spec { max-width: 100%; white-space: normal; line-height: 1.6; }
 .dropzone .accentdot, .dropcard .accentdot { color: var(--signal-500); }
-.recent { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 8px; max-width: 100%; }
+/* Short windows: the same sheet, tighter, so RECENT stays in view. */
+@media (max-height: 720px) {
+  .dropzone { padding: var(--space-5) var(--space-6); gap: var(--space-3); }
+  .dropzone .headline { font-size: clamp(24px, 5vw, 32px); }
+}
+
+/* Recent files: left-aligned rows, the name first, its folder after
+   (cut from the left so the nearest folder stays readable). */
+.recent { display: flex; flex-direction: column; align-items: stretch; gap: 2px; margin-top: 4px; width: min(460px, 100%); }
+.recent .rlabel { align-self: flex-start; padding-left: 10px; opacity: 0.55; }
+.recent-item {
+  display: flex; align-items: baseline; gap: 12px; width: 100%;
+  padding: 6px 10px; border: 1px solid transparent; background: none;
+  color: var(--text-body); font-family: var(--font-mono); font-size: 12px; text-align: left; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-mech), border-color var(--dur-fast) var(--ease-mech);
+}
+.recent-item:hover { background: var(--surface-inset); border-color: var(--border-hairline); }
+.recent-item:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -1px; }
+.recent-item:active { transform: translateY(1px); }
+.recent-item .rname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-item .rdir { flex: 0 1 auto; max-width: 48%; font-size: 10px; letter-spacing: 0.06em; color: var(--text-spec); }
 
 /* ── file drag + loading ────────────────────────────────────────────── */
 /* The veil never takes pointer events: drags keep hit-testing the
@@ -736,6 +782,13 @@
   gap: var(--space-4);
   position: relative;
 }
+.dialog:focus { outline: none; }
+/* A sheet's subtitle is one spec line: long names end in an ellipsis
+   (the full text is in its tooltip) instead of crossing the frame. */
+.dialog .dsub { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dialog input.invalid { border-color: var(--fault-500); }
+/* A path cut short keeps its end (the file name): the ellipsis goes left. */
+.path-tail { direction: rtl; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dialog .dtitle { font-size: 22px; }
 .dialog .drow { display: flex; align-items: center; gap: var(--space-2); }
 .dialog input[type='text'] {
@@ -915,12 +968,15 @@
 
 /* toasts */
 .toasts { position: fixed; left: var(--space-4); bottom: 34px; display: flex; flex-direction: column; gap: var(--space-2); z-index: 60; max-width: calc(100vw - 2 * var(--space-4)); }
+/* A dark plate in both themes, as the design system's Toast: on the white
+   PAPER page it has to stand off the sheet, not blend into it. */
 .toast {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-mid);
+  background: var(--graphite-900);
+  color: var(--paper);
+  border: 1px solid var(--graphite-700);
   padding: 8px 14px;
   font-family: var(--font-mono);
   font-size: 11.5px;

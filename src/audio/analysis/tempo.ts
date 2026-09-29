@@ -59,15 +59,30 @@ export interface TempoAnalysis {
 
 /** Below this global confidence the pulse is too vague to judge drift. */
 const DRIFT_MIN_CONFIDENCE = 0.25;
+/** Columns this far below the loudest one are silence. */
+const SILENCE_DB = 60;
+/** Silence shorter than this at either end is just the file's edge. */
+const EDGE_SILENCE_SEC = 0.5;
+/** Band count of the per-column features that sections are found from. */
+const N_BANDS = 8;
+
+const NO_TEMPO: TempoAnalysis = {
+  bpm: 0, firstBeatSec: 0, firstBarSec: 0, confidence: 0, sections: [],
+  curve: null, beats: [], downbeat: 0, drift: null,
+};
 
 /**
  * Spectral-flux onset envelope → autocorrelation with octave weighting →
  * parabolic-refined BPM → beat phase by comb alignment; checkerboard
  * novelty for sections; then the tempo curve, tracked beats and drift.
+ * Tempo is measured on the music alone: silence before or after it would
+ * drag the beat grid. A track with no pulse reports bpm 0 and sections.
  */
 export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): TempoAnalysis {
   const n = L.length;
+  if (n < TEMPO_FFT * 2) return NO_TEMPO;
   const hopSec = TEMPO_HOP / fs;
+  const durSec = n / fs;
   const cols = Math.max(2, Math.floor((n - TEMPO_FFT) / TEMPO_HOP) + 1);
 
   // Onset envelope: half-wave-rectified log-magnitude spectral flux.
@@ -80,10 +95,10 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
   const prevMag = new Float64Array(TEMPO_FFT / 2);
   const env = new Float64Array(cols);
   const lowEnv = new Float64Array(cols);      // < ~220 Hz flux: kick/bass onsets
+  const colPow = new Float64Array(cols);      // column power, for silence
   const lowBins = Math.max(2, Math.round(220 / (fs / TEMPO_FFT)));
 
   // Per-column 8-band log energies for section detection.
-  const N_BANDS = 8;
   const bandEdges = new Int32Array(N_BANDS + 1);
   for (let b = 0; b <= N_BANDS; b++) {
     const f = 60 * Math.pow(12000 / 60, b / N_BANDS);
@@ -100,8 +115,11 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
     fft(re, im);
     let flux = 0;
     let lowFlux = 0;
+    let pow = 0;
     for (let k = 1; k < TEMPO_FFT / 2; k++) {
-      const mag = Math.log1p(20 * Math.sqrt(re[k] * re[k] + im[k] * im[k]));
+      const p2 = re[k] * re[k] + im[k] * im[k];
+      pow += p2;
+      const mag = Math.log1p(20 * Math.sqrt(p2));
       const d = mag - prevMag[k];
       if (d > 0) {
         flux += d;
@@ -111,6 +129,7 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
     }
     env[c] = flux;
     lowEnv[c] = lowFlux;
+    colPow[c] = pow;
     for (let b = 0; b < N_BANDS; b++) {
       let e = 0;
       for (let k = bandEdges[b]; k < bandEdges[b + 1]; k++) {
@@ -119,6 +138,21 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
       bandFeat[c * N_BANDS + b] = Math.log10(e + 1e-10);
     }
   }
+
+  // Where the music is: columns [a0, a1] between the silence at the ends.
+  let peakPow = 0;
+  for (let c = 0; c < cols; c++) if (colPow[c] > peakPow) peakPow = colPow[c];
+  if (!(peakPow > 0)) return { ...NO_TEMPO, sections: [{ startSec: 0, endSec: durSec, label: 'SILENCE' }] };
+  const gate = peakPow * Math.pow(10, -SILENCE_DB / 10);
+  let a0 = 0, a1 = cols - 1;
+  while (a0 < a1 && colPow[a0] <= gate) a0++;
+  while (a1 > a0 && colPow[a1] <= gate) a1--;
+  const edge = Math.round(EDGE_SILENCE_SEC / hopSec);
+  if (a0 < edge) a0 = 0;
+  if (cols - 1 - a1 < edge) a1 = cols - 1;
+  const offSec = a0 * hopSec;
+  const endSec = a1 === cols - 1 ? durSec : (a1 * TEMPO_HOP + TEMPO_FFT) / fs;
+
   // Remove the slow-moving mean so the autocorrelation sees pulses only.
   const meanWin = Math.round(1.0 / hopSec);
   const detrended = new Float64Array(cols);
@@ -129,23 +163,26 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
     const mean = acc / Math.min(c + 1, meanWin);
     detrended[c] = Math.max(0, env[c] - mean);
   }
+  // Everything below runs on the music's columns; times add `offSec`.
+  const det = detrended.subarray(a0, a1 + 1);
+  const aCols = det.length;
 
   // Autocorrelation over 60–200 BPM lags, weighted toward ~120 BPM.
   const minLag = Math.max(2, Math.floor(60 / 200 / hopSec));
-  const maxLag = Math.min(cols - 2, Math.ceil(60 / 60 / hopSec));
+  const maxLag = Math.min(aCols - 2, Math.ceil(60 / 60 / hopSec));
   let bestLag = 0;
   let bestScore = -1;
   const acAt = (lag: number): number => {
     let s = 0;
-    for (let c = lag; c < cols; c++) s += detrended[c] * detrended[c - lag];
-    return s / (cols - lag);
+    for (let c = lag; c < aCols; c++) s += det[c] * det[c - lag];
+    return s / (aCols - lag);
   };
-  const acCache = new Float64Array(maxLag + 2);
+  const acCache = new Float64Array(Math.max(minLag, maxLag) + 2);
   for (let lag = minLag; lag <= maxLag; lag++) acCache[lag] = acAt(lag);
   // A drifting tempo smears the whole-track peak at the beat, which can let
   // a dotted or triplet periodicity win; short windows hardly drift, so
   // they vote on the tempo and the whole-track peak is sought near it.
-  const voted = votedLag(detrended, minLag, maxLag, hopSec);
+  const voted = votedLag(det, minLag, maxLag, hopSec);
   for (let lag = minLag; lag <= maxLag; lag++) {
     if (voted && Math.abs(Math.log(lag / voted)) > 0.08) continue;
     const bpm = 60 / (lag * hopSec);
@@ -155,11 +192,20 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
     const score = (acCache[lag] + harmonic) * w;
     if (score > bestScore) { bestScore = score; bestLag = lag; }
   }
-  if (bestLag === 0) {
-    return {
-      bpm: 0, firstBeatSec: 0, firstBarSec: 0, confidence: 0, sections: [],
-      curve: null, beats: [], downbeat: 0, drift: null,
-    };
+
+  // Confidence: winning peak vs the autocorrelation average.
+  let acMean = 0;
+  let acCount = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) { acMean += acCache[lag]; acCount++; }
+  acMean /= Math.max(1, acCount);
+  const confidence = bestLag > 0 && acMean > 0
+    ? Math.max(0, Math.min(1, (acCache[bestLag] / acMean - 1) / 4))
+    : 0;
+  // No periodicity at all (silence, a blip, a drone), or less than a bar
+  // of music to hear one in: no tempo, but the sections still stand.
+  if (confidence <= 0 || aCols < 4 * bestLag) {
+    const bounds = withSilence(sectionBounds(bandFeat, colPow, gate, hopSec, a0, a1), offSec, endSec, durSec);
+    return { ...NO_TEMPO, sections: labelSections(bounds, durSec, bandFeat, colPow, gate, hopSec) };
   }
 
   // Parabolic refinement around the winning lag.
@@ -167,7 +213,8 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
   if (bestLag > minLag && bestLag < maxLag) {
     const y0 = acCache[bestLag - 1], y1 = acCache[bestLag], y2 = acCache[bestLag + 1];
     const denom = y0 - 2 * y1 + y2;
-    if (Math.abs(denom) > 1e-12) refined = bestLag + (0.5 * (y0 - y2)) / denom;
+    // Only a real peak refines, and never past its neighbours.
+    if (denom < -1e-12) refined = bestLag + Math.max(-0.5, Math.min(0.5, (0.5 * (y0 - y2)) / denom));
   }
   const bpm = 60 / (refined * hopSec);
 
@@ -179,43 +226,36 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
   // Low bins are few, so even a strong kick is a small share of total flux —
   // any meaningful low-band activity should own the phase decision.
   let lowTotal = 0, fullTotal = 0;
-  for (let c = 0; c < cols; c++) { lowTotal += lowEnv[c]; fullTotal += env[c]; }
-  const phaseBase = lowTotal > fullTotal * 0.004 ? lowEnv : detrended;
+  for (let c = a0; c <= a1; c++) { lowTotal += lowEnv[c]; fullTotal += env[c]; }
+  const phaseBase = lowTotal > fullTotal * 0.004 ? lowEnv.subarray(a0, a1 + 1) : det;
   // Squaring makes sharp attacks (kicks) out-vote slow energy swells.
-  const phaseEnv = new Float64Array(cols);
-  for (let c = 0; c < cols; c++) phaseEnv[c] = phaseBase[c] * phaseBase[c];
+  const phaseEnv = new Float64Array(aCols);
+  for (let c = 0; c < aCols; c++) phaseEnv[c] = phaseBase[c] * phaseBase[c];
   let bestOff = 0;
   let bestSum = -1;
   const steps = Math.min(64, Math.floor(period * 4));
   for (let oi = 0; oi < steps; oi++) {
     const off = (oi / steps) * period;
     let s = 0;
-    for (let c = off; c < cols; c += period) s += phaseEnv[Math.round(c)] ?? 0;
+    for (let c = off; c < aCols; c += period) s += phaseEnv[Math.round(c)] ?? 0;
     if (s > bestSum) { bestSum = s; bestOff = off; }
   }
   // Flux lands in the first window containing an onset, whose start time is
   // about half a window early — compensate so beats sit on the true onsets.
   const latencySec = TEMPO_FFT / 2 / fs;
-  let firstBeatSec = bestOff * hopSec + latencySec;
+  let firstBeatSec = offSec + bestOff * hopSec + latencySec;
   const periodSec = refined * hopSec;
-  while (firstBeatSec >= periodSec) firstBeatSec -= periodSec;
-
-  // Confidence: winning peak vs the autocorrelation average.
-  let acMean = 0;
-  let acCount = 0;
-  for (let lag = minLag; lag <= maxLag; lag++) { acMean += acCache[lag]; acCount++; }
-  acMean /= Math.max(1, acCount);
-  const confidence = Math.max(0, Math.min(1, acMean > 0 ? (acCache[bestLag] / acMean - 1) / 4 : 0));
+  firstBeatSec = ((firstBeatSec % periodSec) + periodSec) % periodSec;
 
   // ── tempo over time ───────────────────────────────────────────────
-  const durSec = n / fs;
-  const curve = tempoCurve(detrended, refined, hopSec);
+  const localCurve = tempoCurve(det, refined, hopSec);
+  const curve = localCurve && { ...localCurve, startSec: localCurve.startSec + offSec };
   // Beats follow the same kick-led onsets as the phase above, so they land
   // on the beat rather than on off-beat hats and claps.
-  const beats = trackBeats(phaseEnv, curve, refined, hopSec, latencySec);
+  const beats = trackBeats(phaseEnv, localCurve, refined, hopSec, latencySec).map((t) => t + offSec);
   const fit = fitFixedGrid(beats);
   const drift = curve && fit && confidence >= DRIFT_MIN_CONFIDENCE
-    ? assessDrift(curve, fit, bpm, durSec)
+    ? assessDrift(curve, fit, bpm, offSec, endSec)
     : null;
   // The best fixed grid through the tracked beats is a finer tempo and
   // phase than the whole-track estimate, so a steady track adopts it.
@@ -228,44 +268,8 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
   }
 
   // ── section detection ─────────────────────────────────────────────
-  // Checkerboard novelty on smoothed band features: how different the next
-  // ~2 s sounds from the previous ~2 s, evaluated every quarter second.
   const beatSecF = 60 / bpmOut;
-  const W = Math.round(2.0 / hopSec);
-  const stride = Math.max(1, Math.round(0.25 / hopSec));
-  const novelty: { sec: number; v: number }[] = [];
-  for (let c = W; c < cols - W; c += stride) {
-    let dist = 0;
-    for (let b = 0; b < N_BANDS; b++) {
-      let before = 0, after = 0;
-      for (let k = 1; k <= W; k++) {
-        before += bandFeat[(c - k) * N_BANDS + b];
-        after += bandFeat[(c + k - 1) * N_BANDS + b];
-      }
-      const d = (after - before) / W;
-      dist += d * d;
-    }
-    novelty.push({ sec: c * hopSec, v: Math.sqrt(dist) });
-  }
-  let nvMean = 0;
-  for (const p of novelty) nvMean += p.v;
-  nvMean /= Math.max(1, novelty.length);
-  let nvVar = 0;
-  for (const p of novelty) nvVar += (p.v - nvMean) * (p.v - nvMean);
-  const nvStd = Math.sqrt(nvVar / Math.max(1, novelty.length));
-  const threshold = nvMean + nvStd * 1.2;
-  const minGapSec = 8;
-  const rawBounds: number[] = [];
-  for (let i = 1; i < novelty.length - 1; i++) {
-    const p = novelty[i];
-    if (p.v > threshold && p.v >= novelty[i - 1].v && p.v >= novelty[i + 1].v) {
-      if (rawBounds.length === 0 || p.sec - rawBounds[rawBounds.length - 1] >= minGapSec) {
-        rawBounds.push(p.sec);
-      } else if (p.v > (novelty.find((q) => q.sec === rawBounds[rawBounds.length - 1])?.v ?? 0)) {
-        rawBounds[rawBounds.length - 1] = p.sec;
-      }
-    }
-  }
+  const rawBounds = sectionBounds(bandFeat, colPow, gate, hopSec, a0, a1);
 
   // ── bar anchoring ─────────────────────────────────────────────────
   // Sections start on downbeats. A steady track uses one fixed bar grid;
@@ -312,31 +316,150 @@ export function analyzeTempo(L: Float32Array, R: Float32Array, fs: number): Temp
     });
   }
 
-  // Sections with energy-class labels (mean band energy terciles).
-  const boundsAll = [0, ...snapped.filter((b) => b > 1 && b < durSec - 2), durSec];
-  const sections: SongSection[] = [];
+  const bounds = withSilence(snapped, offSec, endSec, durSec);
+  const sections = labelSections(bounds, durSec, bandFeat, colPow, gate, hopSec);
+  return { bpm: bpmOut, firstBeatSec, firstBarSec, confidence, sections, curve, beats, downbeat, drift };
+}
+
+/** Silence at least this long before or after the music is a section. */
+const SILENT_SECTION_SEC = 2;
+
+/**
+ * The music's own section changes, plus where it starts and stops when
+ * real silence lies before or after it. Those two are exact, not bar lines.
+ */
+function withSilence(bounds: number[], musicStartSec: number, musicEndSec: number, durSec: number): number[] {
+  const inner = bounds.filter((b) => b > musicStartSec + 1 && b < musicEndSec - 1);
+  return [
+    ...(musicStartSec >= SILENT_SECTION_SEC ? [musicStartSec] : []),
+    ...inner,
+    ...(durSec - musicEndSec >= SILENT_SECTION_SEC ? [musicEndSec] : []),
+  ];
+}
+
+/**
+ * Section changes inside the music [a0, a1]: checkerboard novelty on the
+ * band features (how different the next ~2 s sounds from the previous
+ * ~2 s, every quarter second), peaks above the music's typical change.
+ * Silence would dwarf every real change, so windows that touch any don't
+ * set that bar.
+ */
+function sectionBounds(
+  bandFeat: Float64Array, colPow: Float64Array, gate: number, hopSec: number, a0: number, a1: number,
+): number[] {
+  const cols = colPow.length;
+  const quiet = new Int32Array(cols + 1);   // silent columns before each index
+  for (let c = 0; c < cols; c++) quiet[c + 1] = quiet[c] + (colPow[c] <= gate ? 1 : 0);
+  const W = Math.round(2.0 / hopSec);
+  const stride = Math.max(1, Math.round(0.25 / hopSec));
+  const novelty: { sec: number; v: number; inMusic: boolean; clean: boolean }[] = [];
+  for (let c = W; c < cols - W; c += stride) {
+    let dist = 0;
+    for (let b = 0; b < N_BANDS; b++) {
+      let before = 0, after = 0;
+      for (let k = 1; k <= W; k++) {
+        before += bandFeat[(c - k) * N_BANDS + b];
+        after += bandFeat[(c + k - 1) * N_BANDS + b];
+      }
+      const d = (after - before) / W;
+      dist += d * d;
+    }
+    const inMusic = c - W >= a0 && c + W <= a1 + 1;
+    novelty.push({ sec: c * hopSec, v: Math.sqrt(dist), inMusic, clean: inMusic && quiet[c + W] === quiet[c - W] });
+  }
+  let ref = novelty.filter((p) => p.clean);
+  if (ref.length < 8) ref = novelty.filter((p) => p.inMusic);
+  if (ref.length < 8) ref = novelty;
+  let nvMean = 0;
+  for (const p of ref) nvMean += p.v;
+  nvMean /= Math.max(1, ref.length);
+  let nvVar = 0;
+  for (const p of ref) nvVar += (p.v - nvMean) * (p.v - nvMean);
+  const nvStd = Math.sqrt(nvVar / Math.max(1, ref.length));
+  const threshold = nvMean + nvStd * 1.2;
+  const minGapSec = 8;
+  const rawBounds: number[] = [];
+  for (let i = 1; i < novelty.length - 1; i++) {
+    const p = novelty[i];
+    if (p.inMusic && p.v > threshold && p.v >= novelty[i - 1].v && p.v >= novelty[i + 1].v) {
+      if (rawBounds.length === 0 || p.sec - rawBounds[rawBounds.length - 1] >= minGapSec) {
+        rawBounds.push(p.sec);
+      } else if (p.v > (novelty.find((q) => q.sec === rawBounds[rawBounds.length - 1])?.v ?? 0)) {
+        rawBounds[rawBounds.length - 1] = p.sec;
+      }
+    }
+  }
+
+  // A build-up (a riser, a crescendo) draws the 2 s novelty early, a bar
+  // or so ahead of the change; the change itself is where the sound turns
+  // over within half a second, so each one moves to the sharpest turn
+  // near it.
+  const Ws = Math.round(0.5 / hopSec);
+  const cum = new Float64Array((cols + 1) * N_BANDS);
+  for (let c = 0; c < cols; c++) {
+    for (let b = 0; b < N_BANDS; b++) cum[(c + 1) * N_BANDS + b] = cum[c * N_BANDS + b] + bandFeat[c * N_BANDS + b];
+  }
+  const turn = (c: number): number => {
+    let dist = 0;
+    for (let b = 0; b < N_BANDS; b++) {
+      const before = cum[c * N_BANDS + b] - cum[(c - Ws) * N_BANDS + b];
+      const after = cum[(c + Ws) * N_BANDS + b] - cum[c * N_BANDS + b];
+      dist += ((after - before) / Ws) ** 2;
+    }
+    return dist;
+  };
+  return rawBounds.map((t) => {
+    const lo = Math.max(a0 + Ws, Math.round((t - REFINE_BACK_SEC) / hopSec));
+    const hi = Math.min(a1 + 1 - Ws, Math.round((t + REFINE_AHEAD_SEC) / hopSec));
+    let best = -1, bestV = -1;
+    for (let c = lo; c <= hi; c++) {
+      const v = turn(c);
+      if (v > bestV) { bestV = v; best = c; }
+    }
+    return best >= 0 ? best * hopSec : t;
+  });
+}
+
+/** How far around a 2 s novelty peak the sharp turn is sought. */
+const REFINE_BACK_SEC = 1;
+const REFINE_AHEAD_SEC = 2.5;
+
+/**
+ * Sections between the boundaries, labelled by energy (terciles of the
+ * music's mean band energy); a stretch that is nearly all silence says so.
+ */
+function labelSections(
+  bounds: number[], durSec: number, bandFeat: Float64Array, colPow: Float64Array, gate: number, hopSec: number,
+): SongSection[] {
+  const cols = colPow.length;
+  const boundsAll = [0, ...bounds.filter((b) => b > 1 && b < durSec - 2), durSec];
   const means: number[] = [];
+  const silent: boolean[] = [];
   for (let i = 0; i < boundsAll.length - 1; i++) {
     const c0 = Math.floor(boundsAll[i] / hopSec);
     const c1 = Math.min(cols, Math.floor(boundsAll[i + 1] / hopSec));
-    let m = 0, cnt = 0;
+    let m = 0, cnt = 0, quiet = 0;
     for (let c = c0; c < c1; c++) {
       for (let b = 0; b < N_BANDS; b++) m += bandFeat[c * N_BANDS + b];
+      if (colPow[c] <= gate) quiet++;
       cnt++;
     }
     means.push(cnt > 0 ? m / cnt : -10);
+    silent.push(cnt > 0 && quiet >= 0.9 * cnt);
   }
-  const sorted = [...means].sort((a, b) => a - b);
+  const sorted = means.filter((_, i) => !silent[i]).sort((a, b) => a - b);
   const t1 = sorted[Math.floor(sorted.length / 3)];
   const t2 = sorted[Math.floor((sorted.length * 2) / 3)];
+  const first = silent.indexOf(false);
+  const last = silent.lastIndexOf(false);
+  const sections: SongSection[] = [];
   for (let i = 0; i < boundsAll.length - 1; i++) {
-    let label = means[i] <= t1 ? 'LOW' : means[i] >= t2 ? 'PEAK' : 'MID';
-    if (i === 0 && label !== 'PEAK') label = 'INTRO';
-    if (i === boundsAll.length - 2 && i > 0 && label !== 'PEAK') label = 'OUTRO';
+    let label = silent[i] ? 'SILENCE' : means[i] <= t1 ? 'LOW' : means[i] >= t2 ? 'PEAK' : 'MID';
+    if (i === first && label !== 'PEAK') label = 'INTRO';
+    if (i === last && i > first && label !== 'PEAK') label = 'OUTRO';
     sections.push({ startSec: boundsAll[i], endSec: boundsAll[i + 1], label });
   }
-
-  return { bpm: bpmOut, firstBeatSec, firstBarSec, confidence, sections, curve, beats, downbeat, drift };
+  return sections;
 }
 
 interface FixedGridFit {
@@ -599,9 +722,12 @@ const DRIFT_MIN_SLIP_SEC = 0.06;
  * tracker can't raise it) and, unless it moves a lot, the beats to slide
  * off any fixed grid (so curve noise alone can't either). Regions are
  * measured against the tempo the track sets out at, which is usually the
- * tempo it was meant to have.
+ * tempo it was meant to have, and end where the music does, not in the
+ * silence after it.
  */
-function assessDrift(curve: TempoCurve, fit: FixedGridFit, bpm: number, durSec: number): TempoDrift | null {
+function assessDrift(
+  curve: TempoCurve, fit: FixedGridFit, bpm: number, musicStartSec: number, musicEndSec: number,
+): TempoDrift | null {
   const at = (i: number) => curve.startSec + i * curve.stepSec;
   const valid: { i: number; v: number }[] = [];
   curve.bpm.forEach((v, i) => { if (Number.isFinite(v)) valid.push({ i, v }); });
@@ -666,8 +792,8 @@ function assessDrift(curve: TempoCurve, fit: FixedGridFit, bpm: number, durSec: 
     let pk = a;
     for (let i = a; i <= b; i++) if (Math.abs(vals[i] - refBpm) > Math.abs(vals[pk] - refBpm)) pk = i;
     return {
-      startSec: a === 0 ? 0 : at(a),
-      endSec: b === lastIdx ? durSec : at(b),
+      startSec: a === 0 ? musicStartSec : at(a),
+      endSec: b === lastIdx ? musicEndSec : at(b),
       peakSec: at(pk),
       peakBpm: vals[pk],
     };

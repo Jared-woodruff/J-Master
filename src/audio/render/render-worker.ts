@@ -1,9 +1,8 @@
 // Offline worker: source analysis (LUFS / peaks / waveform buckets) and the
-// export render. The render runs the same MasterChain as the preview, then
-// solves the loudness target exactly: measure → gain → limit → verify.
+// export render. The render (render/master.ts) runs the same MasterChain as
+// the preview, then solves the loudness target: measure → gain → limit.
 import { MasterChain } from '../dsp/chain';
 import { Biquad } from '../dsp/biquad';
-import { Limiter } from '../dsp/limiter';
 import {
   measureIntegratedLufs,
   measureTruePeakDb,
@@ -13,8 +12,9 @@ import {
   shortTermSeriesFromHops,
   loudnessRangeFromHops,
 } from '../dsp/loudness';
-import { ChainParams, NOMINAL_LUFS, dbToLin } from '../dsp/params';
+import { ChainParams, stagingGainDbFor } from '../dsp/params';
 import { encodeAudio, EncodeOptions, QuantCache } from '../encode';
+import { renderMaster } from './master';
 import { fft } from '../dsp/fft';
 import { analyzeTempo } from '../analysis/tempo';
 
@@ -113,44 +113,11 @@ function preview(msg: PreviewMsg): void {
     post({ type: 'previewed', reqId: msg.reqId, unprimed: true });
     return;
   }
-  const L = new Float32Array(primedL);
-  const R = new Float32Array(primedR);
+  // Exactly the export's master (same stages, same loudness solve), so
+  // what OUT shows is what RENDER writes.
   const fs = primedFs;
+  const { L, R } = renderMaster(primedL, primedR, fs, msg.params, primedLufs);
   const n = L.length;
-  const params: ChainParams = { ...msg.params };
-  params.stagingGainDb = NOMINAL_LUFS - primedLufs;
-  params.outputGainDb = 0;
-  params.limiterDelta = false;
-  const coreParams: ChainParams = { ...params, ceilingDb: 24 };
-
-  const chain = new MasterChain(fs, BLOCK);
-  chain.setParams(coreParams);
-  chain.snapParams();
-  for (let s = 0; s < n; s += BLOCK) {
-    chain.processBlock(L, R, s, Math.min(BLOCK, n - s), s);
-  }
-  const coreHops = computeLoudnessHops(L, R, fs);
-  const coreLufs = gatedLoudnessFromHops(coreHops);
-  // Same iterative loudness solve as the export (limiting pushes back).
-  const coreL = new Float32Array(L);
-  const coreR = new Float32Array(R);
-  let gainDb = msg.params.targetLufs - coreLufs;
-  for (let iter = 0; iter < 3; iter++) {
-    const limiter = new Limiter(fs);
-    limiter.setCeiling(msg.params.ceilingDb);
-    const g = dbToLin(gainDb);
-    for (let s = 0; s < n; s += BLOCK) {
-      const len = Math.min(BLOCK, n - s);
-      for (let i = s; i < s + len; i++) {
-        L[i] = coreL[i] * g;
-        R[i] = coreR[i] * g;
-      }
-      limiter.processBlock(L, R, s, len);
-    }
-    const err = msg.params.targetLufs - gatedLoudnessFromHops(computeLoudnessHops(L, R, fs));
-    if (Math.abs(err) < 0.25) break;
-    gainDb += err * 0.95;
-  }
 
   const SPB = 512;
   const buckets = Math.max(1, Math.ceil(n / SPB));
@@ -275,7 +242,13 @@ function profile(msg: ProfileMsg): void {
 function tempo(msg: TempoMsg): void {
   const L = new Float32Array(msg.l);
   const R = new Float32Array(msg.r);
-  post({ type: 'tempo', ...analyzeTempo(L, R, msg.fs) });
+  // Every request gets exactly one answer: the engine pairs answers with
+  // requests in order, so a missing one would hand the next track this one.
+  try {
+    post({ type: 'tempo', ...analyzeTempo(L, R, msg.fs) });
+  } catch {
+    post({ type: 'tempo', bpm: 0, firstBeatSec: 0, firstBarSec: 0, confidence: 0, sections: [], curve: null, beats: [], downbeat: 0, drift: null });
+  }
 }
 
 // ── spectrogram ───────────────────────────────────────────────────────
@@ -353,22 +326,26 @@ function calibrate(msg: CalibrateMsg): void {
   const rawLufs = measureIntegratedLufs(L, R, fs);
 
   const params: ChainParams = { ...msg.params };
-  params.stagingGainDb = NOMINAL_LUFS - msg.sourceLufs;
+  params.stagingGainDb = stagingGainDbFor(msg.sourceLufs);
   params.outputGainDb = 0;
   params.fadeInSec = 0;
   params.fadeOutSec = 0;
   params.ceilingDb = 24; // transparent limiter for the core measurement
   params.limiterDelta = false;
+  params.bypass = false; // measures the chain, whatever the monitor is on
 
-  const chain = new MasterChain(fs, BLOCK);
+  const chain = new MasterChain(fs, BLOCK, { limiter: false });
   chain.setParams(params);
   chain.snapParams();
   for (let s = 0; s < n; s += BLOCK) {
     chain.processBlock(L, R, s, Math.min(BLOCK, n - s), s);
   }
   const processedLufs = measureIntegratedLufs(L, R, fs);
-  // How the chain changed the excerpt's loudness beyond the staging gain.
-  const chainDeltaDb = processedLufs - (rawLufs + params.stagingGainDb);
+  // How the chain changed the excerpt's loudness beyond the staging gain
+  // (nothing to compare when either side is below the gate).
+  const chainDeltaDb = rawLufs > -70 && processedLufs > -70
+    ? processedLufs - (rawLufs + params.stagingGainDb)
+    : 0;
   post({ type: 'calibrated', seq: msg.seq, chainDeltaDb });
 }
 
@@ -502,62 +479,17 @@ function analyze(msg: AnalyzeMsg): void {
 }
 
 async function render(msg: RenderMsg): Promise<void> {
-  const L = new Float32Array(msg.l);
-  const R = new Float32Array(msg.r);
   const fs = msg.fs;
-  const n = L.length;
-  const params: ChainParams = { ...msg.params };
-
-  // Stage the source at nominal loudness, run the chain core with a
-  // transparent output stage (0 dB gain, limiter ceiling far above signal).
-  // Delta monitoring is a preview tool only — never rendered.
-  params.stagingGainDb = NOMINAL_LUFS - msg.sourceLufs;
-  params.outputGainDb = 0;
-  params.limiterDelta = false;
-  const coreParams: ChainParams = { ...params, ceilingDb: 24 };
-
-  const chain = new MasterChain(fs, BLOCK);
-  chain.setParams(coreParams);
-  chain.snapParams();
-
-  for (let s = 0; s < n; s += BLOCK) {
-    const len = Math.min(BLOCK, n - s);
-    chain.processBlock(L, R, s, len, s);
-    if (s % (BLOCK * 64) === 0) {
-      post({ type: 'progress', reqId: msg.reqId, phase: 'PROCESSING CHAIN', pct: (s / n) * 0.55 });
-    }
-  }
-
-  post({ type: 'progress', reqId: msg.reqId, phase: 'MEASURING LOUDNESS', pct: 0.58 });
-  const coreLufs = measureIntegratedLufs(L, R, fs);
-
-  // Solve gain → limiter so integrated loudness lands on target.
-  let gainDb = msg.params.targetLufs - coreLufs;
-  const outL = new Float32Array(n);
-  const outR = new Float32Array(n);
-  let finalLufs = -70;
-  let limiterMaxGr = 0;
-
-  for (let iter = 0; iter < 4; iter++) {
-    post({ type: 'progress', reqId: msg.reqId, phase: `LIMITING (PASS ${iter + 1})`, pct: 0.62 + iter * 0.08 });
-    const g = dbToLin(gainDb);
-    const limiter = new Limiter(fs);
-    limiter.setCeiling(msg.params.ceilingDb);
-    limiterMaxGr = 0;
-    for (let s = 0; s < n; s += BLOCK) {
-      const len = Math.min(BLOCK, n - s);
-      for (let i = s; i < s + len; i++) {
-        outL[i] = L[i] * g;
-        outR[i] = R[i] * g;
-      }
-      limiter.processBlock(outL, outR, s, len);
-      if (limiter.grDb > limiterMaxGr) limiterMaxGr = limiter.grDb;
-    }
-    finalLufs = measureIntegratedLufs(outL, outR, fs);
-    const err = msg.params.targetLufs - finalLufs;
-    if (Math.abs(err) < 0.15) break;
-    gainDb += err * 0.95;
-  }
+  const n = msg.l.byteLength / 4;
+  const master = renderMaster(
+    new Float32Array(msg.l), new Float32Array(msg.r), fs, msg.params, msg.sourceLufs,
+    (phase, pct) => post({ type: 'progress', reqId: msg.reqId, phase, pct }),
+  );
+  const outL = master.L;
+  const outR = master.R;
+  const finalLufs = master.lufs;
+  const gainDb = master.appliedGainDb;
+  const limiterMaxGr = master.limiterMaxGrDb;
 
   post({ type: 'progress', reqId: msg.reqId, phase: `ENCODING ${msg.encode.format.toUpperCase()}`, pct: 0.9 });
   const truePeakDb = measureTruePeakDb(outL, outR);
@@ -593,6 +525,7 @@ async function render(msg: RenderMsg): Promise<void> {
         samplePeakDb,
         appliedGainDb: gainDb,
         limiterMaxGrDb: limiterMaxGr,
+        loudnessMeasured: master.measured,
         durationSec: n / fs,
         sampleRate: fs,
         bitDepth: msg.encode.format === 'mp3' || msg.encode.format === 'opus' ? 16 : msg.encode.bitDepth,

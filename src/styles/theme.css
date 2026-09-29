@@ -70,6 +70,7 @@
 
 /* ── PLATE theme (default): the mastering floor at night ─────────────── */
 :root, :root[data-theme='plate'] {
+  color-scheme: dark;               /* native checkboxes, scrollbars, pickers */
   --surface-page: var(--graphite-950);
   --surface-raised: var(--graphite-900);
   --surface-inset: #101215;
@@ -97,10 +98,17 @@
   --wave-rms: #565B61;
   --wave-played: var(--signal-500);
   --meter-track: #1A1D21;
+
+  /* The waveform and meter wells are dark in both themes, so whatever is
+     drawn on them (rules, text, the source trace) keeps these values. */
+  --well-hair: #26292E;
+  --well-text: var(--paper);
+  --well-src: var(--graphite-300);
 }
 
 /* ── PAPER theme: the spec sheet ─────────────────────────────────────── */
 :root[data-theme='paper'] {
+  color-scheme: light;
   --surface-page: var(--paper);
   --surface-raised: #FFFFFF;
   --surface-inset: var(--primer-100);

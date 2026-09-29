@@ -1,5 +1,6 @@
 // Keyboard cheat sheet, opened with ? or the KEYS button in the status bar.
 import { useStore } from '../state/store';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 const ROWS: [string, string][] = [
   ['PLAY / PAUSE', 'SPACE'],
@@ -9,6 +10,7 @@ const ROWS: [string, string][] = [
   ['REFERENCE (UNTOUCHED SOURCE)', 'R · HOLD = MOMENTARY'],
   ['A/B SNAPSHOT SLOT', 'A'],
   ['EXPORT', 'E'],
+  ['CLOSE THE OPEN DIALOG', 'ESC'],
   ['SAVE / OPEN PROJECT', 'CTRL+S / CTRL+O'],
   ['UNDO / REDO', 'CTRL+Z / CTRL+Y'],
   ['FINE KNOB DRAG', 'SHIFT+DRAG'],
@@ -23,11 +25,13 @@ export function KeysDialog() {
   const open = useStore((s) => s.keysOpen);
   const openKeys = useStore((s) => s.openKeys);
 
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
+
   if (!open) return null;
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) openKeys(false); }}>
-      <div className="dialog frame" role="dialog" aria-label="Keyboard shortcuts" style={{ width: 420 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Keyboard shortcuts" style={{ width: 420 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 

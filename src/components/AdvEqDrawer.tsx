@@ -7,6 +7,7 @@ import { useStore } from '../state/store';
 import { engine } from '../audio/engine';
 import { Biquad } from '../audio/dsp/biquad';
 import { AdvEqBand } from '../audio/dsp/params';
+import { palette } from '../lib/palette';
 
 const FS = 48000;
 const F_LO = 20;
@@ -64,11 +65,17 @@ export function AdvEqDrawer() {
     const ctx = canvas.getContext('2d')!;
     let raf = 0;
     let w = 0, h = 0, dpr = 1;
+    // Paints only when something drawn changed (or the backdrop moves).
+    let prevSig: unknown[] = [];
     const resize = () => {
       dpr = window.devicePixelRatio || 1;
       w = wrap.clientWidth; h = wrap.clientHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+      const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+      prevSig = [];
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -82,12 +89,17 @@ export function AdvEqDrawer() {
     const draw = () => {
       raf = requestAnimationFrame(draw);
       if (w === 0) return;
-      const bands = useStore.getState().advEq;
-      const cs = getComputedStyle(document.documentElement);
-      const colWell = cs.getPropertyValue('--surface-well').trim() || '#0A0B0D';
-      const colHair = cs.getPropertyValue('--border-hairline').trim() || '#26292E';
-      const colSignal = cs.getPropertyValue('--signal-500').trim() || '#FF4D00';
-      const colSpec = cs.getPropertyValue('--graphite-400').trim() || '#878D93';
+      const st = useStore.getState();
+      const bands = st.advEq;
+      const pal = palette();
+      // While playing, the live spectrum behind the curve moves every frame.
+      const sig = [bands, st.playing || st.audition.active ? performance.now() : 0, w, h, dpr, pal];
+      if (sig.length === prevSig.length && sig.every((v, i) => v === prevSig[i])) return;
+      prevSig = sig;
+      const colWell = pal.well;
+      const colHair = pal.hair;
+      const colSignal = pal.signal;
+      const colSpec = pal.spec;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = colWell;

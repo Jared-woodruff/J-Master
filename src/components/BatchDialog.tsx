@@ -3,6 +3,8 @@
 import { useStore, encodeOptionsFrom, findPreset, consoleMatchesPreset } from '../state/store';
 import { MetaFields } from './MetaFields';
 import { PRESETS } from '../audio/dsp/params';
+import { lufsText } from '../lib/level-text';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 export function BatchDialog() {
   const open = useStore((s) => s.batchOpen);
@@ -33,23 +35,28 @@ export function BatchDialog() {
   const toggleItemFixes = useStore((s) => s.toggleItemFixes);
   const dragging = useStore((s) => s.fileDrag !== null && s.fileDrag.images < s.fileDrag.count) && !running;
 
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
+
   if (!open) return null;
 
   const hasBridge = Boolean((window as any).jmaster?.chooseDirectory);
   const encode = encodeOptionsFrom(useStore.getState());
-  const fmtLabel = encode.format === 'mp3' ? `MP3 ${encode.mp3Kbps}` : `${encode.format.toUpperCase()} 48K/${encode.bitDepth}`;
+  const fmtLabel = encode.format === 'mp3' ? `MP3 ${encode.mp3Kbps}`
+    : encode.format === 'opus' ? `OPUS ${encode.opusKbps}`
+    : `${encode.format.toUpperCase()} 48K/${encode.bitDepth}`;
+  const subtitle = `APPLIES CURRENT CONSOLE · ${consoleName} · ${targetLufs.toFixed(1)} LUFS · ${fmtLabel}`;
   const done = items.filter((i) => i.status === 'done').length;
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget && !running) openBatch(false); }}>
-      <div className="dialog frame" role="dialog" aria-label="Batch master" style={{ width: 620 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Batch master" style={{ width: 620 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
         <div>
           <div className="display dtitle">Batch master</div>
-          <div className="spec" style={{ marginTop: 4 }}>
-            APPLIES CURRENT CONSOLE · {consoleName} · {targetLufs.toFixed(1)} LUFS · {fmtLabel}
+          <div className="spec dsub" title={subtitle}>
+            {subtitle}
           </div>
         </div>
 
@@ -58,27 +65,27 @@ export function BatchDialog() {
           <button className="btn btn-sm btn-ghost" disabled={running || items.length === 0} onClick={clearBatch}>CLEAR</button>
           <span className="grow" style={{ flex: 1 }} />
           <div className="seg">
-            <button className={format === 'wav' ? 'on' : ''} disabled={running} onClick={() => setExportFormat('wav')}>WAV</button>
-            <button className={format === 'flac' ? 'on' : ''} disabled={running} onClick={() => setExportFormat('flac')}>FLAC</button>
-            <button className={format === 'mp3' ? 'on' : ''} disabled={running} onClick={() => setExportFormat('mp3')}>MP3</button>
-            <button className={format === 'opus' ? 'on' : ''} disabled={running} onClick={() => setExportFormat('opus')}>OPUS</button>
+            <button className={format === 'wav' ? 'on' : ''} aria-pressed={format === 'wav'} disabled={running} onClick={() => setExportFormat('wav')}>WAV</button>
+            <button className={format === 'flac' ? 'on' : ''} aria-pressed={format === 'flac'} disabled={running} onClick={() => setExportFormat('flac')}>FLAC</button>
+            <button className={format === 'mp3' ? 'on' : ''} aria-pressed={format === 'mp3'} disabled={running} onClick={() => setExportFormat('mp3')}>MP3</button>
+            <button className={format === 'opus' ? 'on' : ''} aria-pressed={format === 'opus'} disabled={running} onClick={() => setExportFormat('opus')}>OPUS</button>
           </div>
           {format === 'wav' || format === 'flac' ? (
             <div className="seg">
-              <button className={bitDepth === 24 ? 'on' : ''} disabled={running} onClick={() => setExportBitDepth(24)}>24</button>
-              <button className={bitDepth === 16 ? 'on' : ''} disabled={running} onClick={() => setExportBitDepth(16)}>16</button>
+              <button className={bitDepth === 24 ? 'on' : ''} aria-pressed={bitDepth === 24} disabled={running} onClick={() => setExportBitDepth(24)}>24</button>
+              <button className={bitDepth === 16 ? 'on' : ''} aria-pressed={bitDepth === 16} disabled={running} onClick={() => setExportBitDepth(16)}>16</button>
             </div>
           ) : format === 'mp3' ? (
             <div className="seg">
-              <button className={mp3Kbps === 320 ? 'on' : ''} disabled={running} onClick={() => setExportMp3Kbps(320)}>320</button>
-              <button className={mp3Kbps === 256 ? 'on' : ''} disabled={running} onClick={() => setExportMp3Kbps(256)}>256</button>
-              <button className={mp3Kbps === 192 ? 'on' : ''} disabled={running} onClick={() => setExportMp3Kbps(192)}>192</button>
+              <button className={mp3Kbps === 320 ? 'on' : ''} aria-pressed={mp3Kbps === 320} disabled={running} onClick={() => setExportMp3Kbps(320)}>320</button>
+              <button className={mp3Kbps === 256 ? 'on' : ''} aria-pressed={mp3Kbps === 256} disabled={running} onClick={() => setExportMp3Kbps(256)}>256</button>
+              <button className={mp3Kbps === 192 ? 'on' : ''} aria-pressed={mp3Kbps === 192} disabled={running} onClick={() => setExportMp3Kbps(192)}>192</button>
             </div>
           ) : (
             <div className="seg">
-              <button className={opusKbps === 256 ? 'on' : ''} disabled={running} onClick={() => setExportOpusKbps(256)}>256</button>
-              <button className={opusKbps === 192 ? 'on' : ''} disabled={running} onClick={() => setExportOpusKbps(192)}>192</button>
-              <button className={opusKbps === 128 ? 'on' : ''} disabled={running} onClick={() => setExportOpusKbps(128)}>128</button>
+              <button className={opusKbps === 256 ? 'on' : ''} aria-pressed={opusKbps === 256} disabled={running} onClick={() => setExportOpusKbps(256)}>256</button>
+              <button className={opusKbps === 192 ? 'on' : ''} aria-pressed={opusKbps === 192} disabled={running} onClick={() => setExportOpusKbps(192)}>192</button>
+              <button className={opusKbps === 128 ? 'on' : ''} aria-pressed={opusKbps === 128} disabled={running} onClick={() => setExportOpusKbps(128)}>128</button>
             </div>
           )}
         </div>
@@ -88,8 +95,8 @@ export function BatchDialog() {
         {hasBridge && (
           <div className="drow">
             <span className="spec" style={{ width: 64 }}>OUTPUT</span>
-            <span className="spec-value" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {dir ?? '— choose a folder —'}
+            <span className="spec-value path-tail" style={{ flex: 1 }} title={dir ?? undefined}>
+              <bdi>{dir ?? 'CHOOSE A FOLDER'}</bdi>
             </span>
             <button className="btn btn-sm btn-secondary" disabled={running} onClick={() => void chooseBatchDir()}>CHOOSE</button>
           </div>
@@ -104,9 +111,9 @@ export function BatchDialog() {
           {items.map((it, idx) => (
             <div key={it.id} className="batchrow">
               <span className="border" style={{ display: 'inline-flex', flexDirection: 'column', gap: 1 }}>
-                <button className="breorder" disabled={running || idx === 0}
+                <button className="breorder" disabled={running || idx === 0} aria-label={`Move ${it.name} up`}
                   onClick={() => useStore.getState().moveBatchItem(it.id, -1)} title="Move up">▲</button>
-                <button className="breorder" disabled={running || idx === items.length - 1}
+                <button className="breorder" disabled={running || idx === items.length - 1} aria-label={`Move ${it.name} down`}
                   onClick={() => useStore.getState().moveBatchItem(it.id, 1)} title="Move down">▼</button>
               </span>
               <span className="spec" style={{ width: 22 }}>{(idx + 1).toString().padStart(2, '0')}</span>
@@ -115,7 +122,7 @@ export function BatchDialog() {
                   it.status === 'done' ? 'run' : it.status === 'failed' ? 'fault' : it.status === 'working' ? 'signal' : ''
                 }`}
               />
-              <span className="bname">{it.name}</span>
+              <span className="bname" title={it.name}>{it.name}</span>
               <select
                 className="bselect"
                 value={it.presetId ?? ''}
@@ -135,20 +142,21 @@ export function BatchDialog() {
               </select>
               {it.scanned && it.fixes && it.fixes.length > 0 && it.status === 'pending' && (
                 <button
-                  className={`bfix ${it.fixesEnabled ? 'on' : ''}`}
+                  className={`bfix ${it.fixesEnabled ? 'on' : ''}`} aria-pressed={it.fixesEnabled}
                   disabled={running}
-                  title={`Diagnosed: ${it.fixes.map((f) => f.fixLabel).join(' · ')} — click to ${it.fixesEnabled ? 'skip' : 'apply'}`}
+                  title={`Diagnosed: ${it.fixes.map((f) => f.fixLabel).join(' · ')} · click to ${it.fixesEnabled ? 'skip' : 'apply'}`}
                   onClick={() => toggleItemFixes(it.id)}
                 >
                   <span className={`lamp ${it.fixesEnabled ? 'warn' : ''}`} style={{ width: 6, height: 6 }} />
                   FIX {it.fixes.length}
                 </button>
               )}
-              <span className="spec bphase">
+              <span className="spec bphase" title={it.error ?? it.outPath}
+                style={it.error ? { color: 'var(--fault-500)' } : undefined}>
                 {it.status === 'done' && it.outLufs !== undefined
-                  ? `${it.outLufs.toFixed(1)} LUFS`
-                  : it.status === 'failed'
-                    ? 'FAILED'
+                  ? lufsText(it.outLufs)
+                  : it.error
+                    ? it.error
                     : it.phase}
               </span>
               <div className="meter-track" style={{ width: 90, flex: 'none' }}>

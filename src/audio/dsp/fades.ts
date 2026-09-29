@@ -6,6 +6,7 @@ function curveShape(t: number, curve: FadeCurve): number {
     case 'smooth': return t * t * (3 - 2 * t);        // S-curve
     case 'exp': return t * t * t;                     // slow start, late rise
     case 'log': return Math.sqrt(t);                  // fast start, long tail
+    default: return t;
   }
 }
 

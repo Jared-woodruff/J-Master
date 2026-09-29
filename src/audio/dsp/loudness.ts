@@ -21,15 +21,29 @@ function energyToLufs(energy: number): number {
 
 /**
  * Streaming loudness meter for the live UI: feeds per-sample, exposes
- * momentary / short-term / integrated (gated, recomputed periodically).
+ * momentary / short-term / integrated. It runs on the audio thread, so it
+ * never allocates while playing and its work doesn't grow with the length
+ * of the session: the last 3 s of hops sit in a ring, and the integrated
+ * value gates a histogram of block loudness (0.1 LU bins, as libebur128's
+ * histogram mode) instead of re-reading the whole history.
  */
+const HIST_LO = -70;
+const HIST_BIN = 0.1;
+const HIST_BINS = 800;             // -70 .. +10 LUFS
+
 export class LoudnessMeter {
   private shelfL: Biquad; private hpL: Biquad;
   private shelfR: Biquad; private hpR: Biquad;
   private hopLen: number;
   private hopAcc = 0;
   private hopCount = 0;
-  private hops: number[] = [];  // mean-square energy per 100 ms hop
+  private ring = new Float64Array(30);   // the last 30 hop energies (3 s)
+  private ringPos = 0;
+  private hopsSeen = 0;
+  private binCount = new Float64Array(HIST_BINS);
+  private binEnergy = new Float64Array(HIST_BINS);
+  private gatedCount = 0;                // blocks above the absolute gate
+  private gatedEnergy = 0;
   momentary = -70;
   shortTerm = -70;
   integrated = -70;
@@ -41,7 +55,10 @@ export class LoudnessMeter {
 
   reset(): void {
     this.shelfL.reset(); this.hpL.reset(); this.shelfR.reset(); this.hpR.reset();
-    this.hopAcc = 0; this.hopCount = 0; this.hops.length = 0;
+    this.hopAcc = 0; this.hopCount = 0;
+    this.ring.fill(0); this.ringPos = 0; this.hopsSeen = 0;
+    this.binCount.fill(0); this.binEnergy.fill(0);
+    this.gatedCount = 0; this.gatedEnergy = 0;
     this.momentary = -70; this.shortTerm = -70; this.integrated = -70;
   }
 
@@ -53,35 +70,50 @@ export class LoudnessMeter {
       hopAcc += kl * kl + kr * kr;
       hopCount++;
       if (hopCount >= this.hopLen) {
-        this.hops.push(hopAcc / this.hopLen);
+        this.pushHop(hopAcc / this.hopLen);
         hopAcc = 0; hopCount = 0;
-        this.updateReadings();
       }
     }
     this.hopAcc = hopAcc; this.hopCount = hopCount;
   }
 
-  private updateReadings(): void {
-    const hops = this.hops;
-    const n = hops.length;
-    // Momentary: last 4 hops (400 ms).
+  /** The energy of the hop `back` hops before the newest (0 = newest). */
+  private hop(back: number): number {
+    return this.ring[(this.ringPos - 1 - back + 30 * 2) % 30];
+  }
+
+  private pushHop(e: number): void {
+    this.ring[this.ringPos] = e;
+    this.ringPos = (this.ringPos + 1) % 30;
+    const n = ++this.hopsSeen;
+    // Momentary: the last 4 hops (400 ms), which is also one gating block.
     if (n >= 4) {
-      let e = 0;
-      for (let i = n - 4; i < n; i++) e += hops[i];
-      this.momentary = energyToLufs(e / 4);
+      const block = (this.hop(0) + this.hop(1) + this.hop(2) + this.hop(3)) / 4;
+      this.momentary = energyToLufs(block);
+      if (this.momentary > HIST_LO) {
+        const bin = Math.min(HIST_BINS - 1, Math.floor((this.momentary - HIST_LO) / HIST_BIN));
+        this.binCount[bin]++;
+        this.binEnergy[bin] += block;
+        this.gatedCount++;
+        this.gatedEnergy += block;
+      }
     }
-    // Short-term: last 30 hops (3 s).
-    if (n >= 30) {
-      let e = 0;
-      for (let i = n - 30; i < n; i++) e += hops[i];
-      this.shortTerm = energyToLufs(e / 30);
-    } else if (n >= 4) {
-      let e = 0;
-      for (let i = 0; i < n; i++) e += hops[i];
-      this.shortTerm = energyToLufs(e / n);
+    // Short-term: the last 30 hops (3 s), or what there is so far.
+    if (n >= 4) {
+      const k = Math.min(n, 30);
+      let sum = 0;
+      for (let i = 0; i < k; i++) sum += this.hop(i);
+      this.shortTerm = energyToLufs(sum / k);
     }
-    // Integrated (gated): recompute every 5 hops to keep it cheap.
-    if (n >= 4 && n % 5 === 0) this.integrated = gatedLoudnessFromHops(hops);
+    // Integrated: relative gate 10 LU under the absolutely-gated mean.
+    if (n >= 4 && n % 5 === 0) {
+      if (this.gatedCount === 0) { this.integrated = -70; return; }
+      const rel = energyToLufs(this.gatedEnergy / this.gatedCount) - 10;
+      const first = Math.max(0, Math.ceil((rel - HIST_LO) / HIST_BIN - 0.5));
+      let count = 0, energy = 0;
+      for (let b = first; b < HIST_BINS; b++) { count += this.binCount[b]; energy += this.binEnergy[b]; }
+      this.integrated = count > 0 ? energyToLufs(energy / count) : -70;
+    }
   }
 }
 
@@ -177,6 +209,11 @@ export function measureTruePeakDb(L: Float32Array, R: Float32Array): number {
   let peak = 0;
   for (let i = 0; i < L.length; i++) {
     const p = Math.max(tl.process(L[i]), tr.process(R[i]));
+    if (p > peak) peak = p;
+  }
+  // The detector answers a few samples late: flush the end through it.
+  for (let i = 0; i < TruePeakDetector.lag; i++) {
+    const p = Math.max(tl.process(0), tr.process(0));
     if (p > peak) peak = p;
   }
   return 20 * Math.log10(Math.max(peak, 1e-10));

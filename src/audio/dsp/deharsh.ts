@@ -9,6 +9,14 @@ const BAND_HZ = 6500;
 const MAX_CUT_DB = 6;
 /** How far the band may sit below broadband before it counts as harsh. */
 const GRACE_DB = 8;
+/**
+ * The cut is decided every STEP samples, counted from the start of the
+ * stream, never per processing block: the preview's 128-sample blocks and
+ * the export's 4096 must hear exactly the same thing.
+ */
+const STEP = 32;
+/** Below this programme level (≈ −60 dBFS) nothing is judged harsh. */
+const FLOOR = 0.001;
 
 export class DeHarsh {
   private scBand = new Biquad();     // sidechain bandpass (mono sum)
@@ -18,6 +26,7 @@ export class DeHarsh {
   private wideEnv = 0;
   private grSmDb = 0;
   private appliedGrDb = -1;          // last coefficient update
+  private phase = 0;                 // samples since the last decision
   private envAtt: number;
   private envRel: number;
   private grAtt: number;
@@ -41,6 +50,7 @@ export class DeHarsh {
     this.scBand.reset(); this.cutL.reset(); this.cutR.reset();
     this.bandEnv = 0; this.wideEnv = 0; this.grSmDb = 0;
     this.appliedGrDb = -1;
+    this.phase = 0;
   }
 
   setAmount(smooth: number): void { this.amount = smooth; }
@@ -59,8 +69,10 @@ export class DeHarsh {
       this.grSmDb = 0;
       return;
     }
-    const { envAtt, envRel, grAtt, grRel, amount } = this;
-    let bandEnv = this.bandEnv, wideEnv = this.wideEnv, grSmDb = this.grSmDb;
+    const { envAtt, envRel, amount, cutL, cutR } = this;
+    const attStep = Math.min(1, this.grAtt * STEP);
+    const relStep = Math.min(1, this.grRel * STEP);
+    let bandEnv = this.bandEnv, wideEnv = this.wideEnv, grSmDb = this.grSmDb, phase = this.phase;
 
     for (let i = start; i < start + len; i++) {
       const mono = 0.5 * (L[i] + R[i]);
@@ -68,25 +80,27 @@ export class DeHarsh {
       const wide = Math.abs(mono);
       bandEnv += (band > bandEnv ? envAtt : envRel) * (band - bandEnv);
       wideEnv += (wide > wideEnv ? envAtt : envRel) * (wide - wideEnv);
+      L[i] = cutL.process(L[i]);
+      R[i] = cutR.process(R[i]);
+      if (++phase < STEP) continue;
+      phase = 0;
+      // Harshness: band level rising above its graceful share of the
+      // programme (and never in near-silence, where the ratio means nothing).
+      const harshDb = wideEnv > FLOOR
+        ? 20 * Math.log10((bandEnv + 1e-9) / (wideEnv + 1e-9)) + GRACE_DB
+        : 0;
+      const targetGr = Math.min(MAX_CUT_DB, Math.max(0, harshDb)) * amount;
+      grSmDb += (targetGr > grSmDb ? attStep : relStep) * (targetGr - grSmDb);
+      if (grSmDb < 0) grSmDb = 0;
+      // Refresh the cut filter only when the reduction moved meaningfully.
+      if (Math.abs(grSmDb - this.appliedGrDb) > 0.05) {
+        cutL.setPeaking(this.fs, BAND_HZ, -grSmDb, 1.1);
+        cutR.copyCoefficientsFrom(cutL);
+        this.appliedGrDb = grSmDb;
+      }
     }
-    // Harshness: band level rising above its graceful share of the programme.
-    const harshDb =
-      20 * Math.log10((bandEnv + 1e-9) / (wideEnv + 1e-9)) + GRACE_DB;
-    const targetGr = Math.min(MAX_CUT_DB, Math.max(0, harshDb)) * amount;
-    const coef = Math.min(1, (targetGr > grSmDb ? grAtt : grRel) * len);
-    grSmDb += coef * (targetGr - grSmDb);
-    if (grSmDb < 0) grSmDb = 0;
 
-    // Refresh the cut filter only when the reduction moved meaningfully.
-    if (Math.abs(grSmDb - this.appliedGrDb) > 0.05) {
-      this.cutL.setPeaking(this.fs, BAND_HZ, -grSmDb, 1.1);
-      this.cutR.copyCoefficientsFrom(this.cutL);
-      this.appliedGrDb = grSmDb;
-    }
-    this.cutL.processBlock(L, start, len);
-    this.cutR.processBlock(R, start, len);
-
-    this.bandEnv = bandEnv; this.wideEnv = wideEnv; this.grSmDb = grSmDb;
+    this.bandEnv = bandEnv; this.wideEnv = wideEnv; this.grSmDb = grSmDb; this.phase = phase;
   }
 }
 

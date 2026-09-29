@@ -1,7 +1,8 @@
 // ALBUM / CD — assemble the batch queue into a replication-ready package:
 // one 44.1 kHz / 16-bit image WAV with frame-aligned tracks, a CUE sheet
 // carrying CD-TEXT / ISRC / UPC, and a manifest. (Reorder tracks in BATCH.)
-import { useStore } from '../state/store';
+import { useStore, ean13, ISRC_RE } from '../state/store';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 export function AlbumDialog() {
   const open = useStore((s) => s.albumOpen);
@@ -19,21 +20,26 @@ export function AlbumDialog() {
   const chooseBatchDir = useStore((s) => s.chooseBatchDir);
   const assembleAlbum = useStore((s) => s.assembleAlbum);
 
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
+
   if (!open) return null;
 
   const busy = assembling !== null;
   const hasBridge = Boolean((window as any).jmaster?.appendFile);
+  // A full-length code whose check digit fails; a short one is still typing.
+  const upcBad = upc.length >= 12 && !ean13(upc);
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) openAlbum(false); }}>
-      <div className="dialog frame" role="dialog" aria-label="Album assembly" style={{ width: 560 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Album assembly" style={{ width: 560 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
         <div>
           <div className="display dtitle">Album / CD</div>
-          <div className="spec" style={{ marginTop: 4 }}>
-            {meta.album ? meta.album.toUpperCase() : 'SET ALBUM NAME IN METADATA'} ·
+          <div className="spec dsub"
+            title={`${meta.album ? meta.album.toUpperCase() : 'NO ALBUM NAME (SET IT IN BATCH)'} · ${items.length} TRACKS · 44.1 KHZ / 16-BIT IMAGE + CUE`}>
+            {meta.album ? meta.album.toUpperCase() : 'NO ALBUM NAME (SET IT IN BATCH)'} ·
             {' '}{items.length} TRACKS · 44.1 KHZ / 16-BIT IMAGE + CUE
           </div>
         </div>
@@ -46,14 +52,17 @@ export function AlbumDialog() {
 
         <div className="drow">
           <span className="spec" style={{ width: 64 }}>UPC/EAN</span>
-          <input type="text" value={upc} disabled={busy} placeholder="13 digits"
+          <input type="text" value={upc} disabled={busy} placeholder="12 or 13 digits"
+            aria-label="UPC or EAN barcode" aria-invalid={upcBad}
+            className={upcBad ? 'invalid' : undefined}
+            title={upcBad ? 'Not a valid UPC-A (12) or EAN-13 (13) barcode: the check digit doesn’t match' : 'The album’s barcode (CUE CATALOG)'}
             style={{ maxWidth: 140, flex: 'none' }} spellCheck={false}
             onChange={(e) => setAlbumUpc(e.target.value)} />
           <span className="spec" style={{ width: 46, textAlign: 'right' }}>GAP</span>
           <div className="stepper">
-            <button disabled={busy} onClick={() => setAlbumGap(gap - 0.5)}>−</button>
+            <button disabled={busy} aria-label="Shorter gap" onClick={() => setAlbumGap(gap - 0.5)}>−</button>
             <span className="val">{gap.toFixed(1)}s</span>
-            <button disabled={busy} onClick={() => setAlbumGap(gap + 0.5)}>+</button>
+            <button disabled={busy} aria-label="Longer gap" onClick={() => setAlbumGap(gap + 0.5)}>+</button>
           </div>
           <span className="spec">BETWEEN TRACKS</span>
         </div>
@@ -67,11 +76,17 @@ export function AlbumDialog() {
           {items.map((it, idx) => (
             <div key={it.id} className="batchrow">
               <span className="spec" style={{ width: 22 }}>{String(idx + 1).padStart(2, '0')}</span>
-              <span className="bname">{it.name.replace(/\.[^.]+$/, '')}</span>
+              <span className="bname" title={it.name}>{it.name.replace(/\.[^.]+$/, '')}</span>
               <span className="spec">ISRC</span>
               <input
                 type="text" value={it.isrc ?? ''} disabled={busy}
-                placeholder="AUJMW2600001" spellCheck={false}
+                placeholder="CCXXXYYNNNNN" spellCheck={false}
+                aria-label={`ISRC for ${it.name}`}
+                aria-invalid={!!it.isrc && !ISRC_RE.test(it.isrc)}
+                className={it.isrc && !ISRC_RE.test(it.isrc) ? 'invalid' : undefined}
+                title={it.isrc && !ISRC_RE.test(it.isrc)
+                  ? 'An ISRC is 12 characters: country (2 letters), registrant (3), year (2 digits), number (5 digits)'
+                  : 'The track’s ISRC, written into the CUE sheet'}
                 style={{ width: 128, flex: 'none', height: 22, fontSize: 10, padding: '0 6px' }}
                 onChange={(e) => setItemIsrc(it.id, e.target.value)}
               />
@@ -82,8 +97,8 @@ export function AlbumDialog() {
         {hasBridge && (
           <div className="drow">
             <span className="spec" style={{ width: 64 }}>OUTPUT</span>
-            <span className="spec-value" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {dir ?? '— choose a folder —'}
+            <span className="spec-value path-tail" style={{ flex: 1 }} title={dir ?? undefined}>
+              <bdi>{dir ?? 'CHOOSE A FOLDER'}</bdi>
             </span>
             <button className="btn btn-sm btn-secondary" disabled={busy} onClick={() => void chooseBatchDir()}>CHOOSE</button>
           </div>
@@ -105,7 +120,7 @@ export function AlbumDialog() {
           <div className="statgrid">
             <div className="row">
               <span className="spec">IMAGE</span><span className="leader" />
-              <span className="spec-value" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{result.imagePath}</span>
+              <span className="spec-value path-tail" style={{ maxWidth: 300 }} title={result.imagePath}><bdi>{result.imagePath}</bdi></span>
             </div>
             <div className="row">
               <span className="spec">RUNTIME</span><span className="leader" />

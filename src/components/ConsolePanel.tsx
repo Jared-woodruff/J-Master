@@ -59,8 +59,8 @@ export function ConsolePanel() {
         <span className="title">Console</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="seg" style={{ height: 20 }}>
-            <button disabled={undoDepth === 0} title="Undo (Ctrl+Z)" onClick={undo}>⟲</button>
-            <button disabled={redoDepth === 0} title="Redo (Ctrl+Y)" onClick={redo}>⟳</button>
+            <button disabled={undoDepth === 0} title="Undo · Ctrl+Z" aria-label="Undo" onClick={undo}>⟲</button>
+            <button disabled={redoDepth === 0} title="Redo · Ctrl+Y" aria-label="Redo" onClick={redo}>⟳</button>
           </span>
           <span className="seg" style={{ height: 20 }}>
             <button className={advEqOpen ? 'on' : ''}
@@ -79,12 +79,12 @@ export function ConsolePanel() {
           {matchActive && <span className="spec" style={{ color: 'var(--text-accent)' }}>MATCHED</span>}
           <span className="seg" style={{ height: 20 }}>
             <button
-              className={activeSlot === 'A' ? 'on' : ''}
+              className={activeSlot === 'A' ? 'on' : ''} aria-pressed={activeSlot === 'A'}
               title="Console snapshot A · key A switches"
               onClick={() => switchSlot('A')}
             >A</button>
             <button
-              className={activeSlot === 'B' ? 'on' : ''}
+              className={activeSlot === 'B' ? 'on' : ''} aria-pressed={activeSlot === 'B'}
               title={hasB ? 'Console snapshot B · key A switches' : 'Console snapshot B (starts as a copy of A) · key A switches'}
               onClick={() => switchSlot('B')}
             >B</button>
@@ -165,7 +165,7 @@ export function ConsolePanel() {
             <FadeStepper which="in" sec={fadeInSec} onSet={(v) => setFade('in', v)} />
             <div className="seg">
               {CURVES.map((c) => (
-                <button key={c.id} className={fadeInCurve === c.id ? 'on' : ''}
+                <button key={c.id} className={fadeInCurve === c.id ? 'on' : ''} aria-pressed={fadeInCurve === c.id}
                   onClick={() => setFadeCurve('in', c.id)}>{c.label}</button>
               ))}
             </div>
@@ -175,7 +175,7 @@ export function ConsolePanel() {
             <FadeStepper which="out" sec={fadeOutSec} onSet={(v) => setFade('out', v)} />
             <div className="seg">
               {CURVES.map((c) => (
-                <button key={c.id} className={fadeOutCurve === c.id ? 'on' : ''}
+                <button key={c.id} className={fadeOutCurve === c.id ? 'on' : ''} aria-pressed={fadeOutCurve === c.id}
                   onClick={() => setFadeCurve('out', c.id)}>{c.label}</button>
               ))}
             </div>

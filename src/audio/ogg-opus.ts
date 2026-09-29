@@ -218,8 +218,10 @@ export async function encodeOggOpus(
 
   const FRAME = Math.round(sampleRate * 0.02);
   const planar = new Float32Array(FRAME * 2);
-  for (let s = 0; s < n; s += FRAME) {
-    const len = Math.min(FRAME, n - s);
+  // The encoder holds back its lookahead (the pre-skip, ~6.5 ms): one more
+  // frame of silence pushes the real end of the track out through it.
+  for (let s = 0; s < n + FRAME; s += FRAME) {
+    const len = Math.max(0, Math.min(FRAME, n - s));
     planar.fill(0);
     planar.set(L.subarray(s, s + len), 0);
     planar.set(R.subarray(s, s + len), FRAME);
@@ -239,19 +241,25 @@ export async function encodeOggOpus(
   if (encodeError) throw encodeError;
   if (packets.length === 0) throw new Error('opus encoder produced no packets');
 
-  // Mux: header pages, then audio pages of up to 50 packets.
+  // Mux: header pages, then audio pages of up to 50 packets (and never past
+  // the 255 lacing values a page can hold). A page's granule counts every
+  // sample decoded through it, pre-skip included (RFC 7845 §4); the last
+  // one ends playback at the track's real length.
   const pages: Uint8Array[] = [];
   let seq = 0;
   pages.push(buildPage([buildOpusHead(preskip, sampleRate)], 0, seq++, 0x02));
   const tagPages = buildPagesForPacket(buildOpusTags(tags, picture), 0, seq, 0);
   seq += tagPages.length;
   pages.push(...tagPages);
-  const totalGranule = n + preskip; // clamp playback to the real length
-  for (let i = 0; i < packets.length; i += 50) {
-    const group = packets.slice(i, i + 50);
-    const last = i + 50 >= packets.length;
-    const g = Math.min(group[group.length - 1].granule + preskip, last ? totalGranule : Infinity);
-    pages.push(buildPage(group.map((p) => p.data), last ? totalGranule : g, seq++, last ? 0x04 : 0));
+  const totalGranule = Math.min(n + preskip, packets[packets.length - 1].granule);
+  const lacingOf = (p: Packet) => Math.floor(p.data.length / 255) + 1;
+  for (let i = 0; i < packets.length;) {
+    let j = i, segs = 0;
+    while (j < packets.length && j - i < 50 && segs + lacingOf(packets[j]) <= 255) segs += lacingOf(packets[j++]);
+    const group = packets.slice(i, j);
+    const last = j >= packets.length;
+    pages.push(buildPage(group.map((p) => p.data), last ? totalGranule : group[group.length - 1].granule, seq++, last ? 0x04 : 0));
+    i = j;
   }
 
   let size = 0;

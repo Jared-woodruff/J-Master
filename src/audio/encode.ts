@@ -61,6 +61,11 @@ export async function encodeAudio(
   opts: EncodeOptions,
   cache?: QuantCache,
 ): Promise<Encoded> {
+  // The PCM writers only pack 16- and 24-bit samples; any other depth would
+  // produce headers that disagree with the data.
+  if ((opts.format === 'wav' || opts.format === 'flac') && opts.bitDepth !== 16 && opts.bitDepth !== 24) {
+    throw new Error(`unsupported bit depth ${opts.bitDepth}`);
+  }
   const t = opts.tags;
   const trackStr = t?.trackNumber
     ? t.trackTotal ? `${t.trackNumber}/${t.trackTotal}` : `${t.trackNumber}`

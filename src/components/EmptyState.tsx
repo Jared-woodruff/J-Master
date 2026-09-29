@@ -16,9 +16,12 @@ export function EmptyState() {
   const imagesOnly = !!drag && drag.images > 0 && drag.images === drag.count;
   const many = !!drag && drag.count - drag.images > 1;
 
-  // A missing file is reported and pruned by the store's loader.
-  const openRecent = (r: { name: string; path: string }) =>
-    useStore.getState().loadFile(bridge.readFileByPath(r.path), r.name, r.path);
+  // A missing file is reported and pruned by the store's loader. Clicking
+  // a recent file is the user choosing it again, network paths included.
+  const openRecent = (r: { name: string; path: string }) => {
+    bridge.allowPath?.(r.path);
+    return useStore.getState().loadFile(bridge.readFileByPath(r.path), r.name, r.path);
+  };
 
   return (
     <div className="empty">
@@ -67,16 +70,13 @@ export function EmptyState() {
               ANY GENERATOR, ANY DAW, ANY WAV · EVERYTHING PROCESSED ON THIS MACHINE
             </div>
             {canRecent && (
-              <div className="recent">
-                <span className="spec" style={{ opacity: 0.55 }}>RECENT</span>
+              <div className="recent" role="group" aria-label="Recent files">
+                <span className="spec rlabel">RECENT</span>
                 {recent.map((r) => (
-                  <button
-                    key={r.path}
-                    className="btn btn-sm"
-                    style={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    title={r.path}
-                    onClick={() => void openRecent(r)}
-                  >{r.name}</button>
+                  <button key={r.path} className="recent-item" title={r.path} onClick={() => void openRecent(r)}>
+                    <span className="rname">{r.name}</span>
+                    <span className="rdir path-tail"><bdi>{r.path.replace(/[\\/][^\\/]*$/, '')}</bdi></span>
+                  </button>
                 ))}
               </div>
             )}

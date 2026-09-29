@@ -96,6 +96,15 @@ export interface ChainParams {
 
 export const NOMINAL_LUFS = -18;
 
+/**
+ * Gain that stages a source at the nominal level. A source too quiet (or
+ * too short) to measure reads -70 LUFS, which is no loudness at all: it
+ * stays at unity rather than taking +52 dB.
+ */
+export function stagingGainDbFor(sourceLufs: number): number {
+  return sourceLufs > -70 ? NOMINAL_LUFS - sourceLufs : 0;
+}
+
 export function defaultParams(): ChainParams {
   return {
     tone: 0,

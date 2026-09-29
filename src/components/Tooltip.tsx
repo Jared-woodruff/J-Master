@@ -1,9 +1,9 @@
 // One tooltip for the whole app, in the Jamware style. It reads the plain
-// `title` attributes components already set: while an element is hovered
-// (or keyboard-focused) its title moves to data-tip so the slow native
-// tooltip never appears, and it is restored on leave so the accessible
-// description is unchanged. Segments after " · " render as a meta line,
-// with key names shown as key caps.
+// `title` attributes components already set. While an element is hovered
+// its title moves to data-tip so the slow native tooltip never doubles
+// ours, and it comes back on leave. On keyboard focus the title stays put:
+// a screen reader reads the focused control's description from it.
+// Segments after " · " render as a meta line, with key names as key caps.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 interface Tip {
@@ -49,9 +49,14 @@ export function Tooltip() {
       const t = el.getAttribute('title');
       if (t) { el.dataset.tip = t; el.removeAttribute('title'); }
     };
+    // Put the title back (unless the component has set a new one since) and
+    // forget the copy, so a title removed later can't leave a stale tip.
     const restore = (el: HTMLElement) => {
-      if (el.dataset.tip && !el.hasAttribute('title')) el.setAttribute('title', el.dataset.tip);
+      if (el.dataset.tip === undefined) return;
+      if (!el.hasAttribute('title')) el.setAttribute('title', el.dataset.tip);
+      delete el.dataset.tip;
     };
+    const textOf = (el: HTMLElement) => el.dataset.tip ?? el.getAttribute('title') ?? '';
     const hide = () => {
       window.clearTimeout(timer);
       if (current) restore(current);
@@ -62,14 +67,15 @@ export function Tooltip() {
       });
     };
     const show = (el: HTMLElement) => {
-      if (!el.isConnected || !el.dataset.tip) return;
+      const text = textOf(el);
+      if (!el.isConnected || !text) return;
       const r = el.getBoundingClientRect();
-      setTip({ text: el.dataset.tip, x: r.left + r.width / 2, top: r.top, bottom: r.bottom });
+      setTip({ text, x: r.left + r.width / 2, top: r.top, bottom: r.bottom });
     };
-    const arm = (el: HTMLElement, delay: number) => {
+    const arm = (el: HTMLElement, delay: number, hovered: boolean) => {
       if (current && current !== el) restore(current);
       current = el;
-      strip(el);
+      if (hovered) strip(el);
       window.clearTimeout(timer);
       setTip(null);
       const warm = performance.now() - lastHidden < WARM_MS;
@@ -83,13 +89,13 @@ export function Tooltip() {
       const el = tipTarget(e.target);
       if (el === current) return;
       if (!el) { if (current) hide(); return; }
-      arm(el, SHOW_MS);
+      arm(el, SHOW_MS, true);
     };
     const onFocusIn = (e: FocusEvent) => {
       const target = e.target as Element;
       if (!target?.matches?.(':focus-visible')) return;
       const el = tipTarget(target);
-      if (el) arm(el, 250);
+      if (el) arm(el, 250, false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') hide(); };
 

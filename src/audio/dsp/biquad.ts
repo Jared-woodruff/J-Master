@@ -99,13 +99,34 @@ export class Biquad {
     this.a2 = ((A + 1) - (A - 1) * cosW - twoRootAAlpha) / a0;
   }
 
-  // BS.1770-4 K-weighting stage 1: +4 dB high shelf at ~1.68 kHz.
+  // BS.1770-4 K-weighting, derived for any rate the way libebur128 does
+  // (a cookbook shelf sits ~1/6 octave off the standard's and read 1 kHz
+  // 0.25 dB low). At 48 kHz both stages reproduce the standard's table.
+
+  /** Stage 1: the +4 dB pre-filter shelf. */
   setKWeightShelf(fs: number): void {
-    this.setHighShelf(fs, 1681.9744509555319, 3.99984385397, 1.0);
+    const f0 = 1681.974450955533;
+    const G = 3.999843853973347;
+    const Q = 0.7071752369554196;
+    const K = Math.tan((Math.PI * f0) / fs);
+    const Vh = Math.pow(10, G / 20);
+    const Vb = Math.pow(Vh, 0.4996667741545416);
+    const a0 = 1 + K / Q + K * K;
+    this.b0 = (Vh + (Vb * K) / Q + K * K) / a0;
+    this.b1 = (2 * (K * K - Vh)) / a0;
+    this.b2 = (Vh - (Vb * K) / Q + K * K) / a0;
+    this.a1 = (2 * (K * K - 1)) / a0;
+    this.a2 = (1 - K / Q + K * K) / a0;
   }
 
-  // BS.1770-4 K-weighting stage 2: highpass at ~38 Hz.
+  /** Stage 2: the RLB highpass, numerator [1, −2, 1] as specified. */
   setKWeightHighpass(fs: number): void {
-    this.setHighpass(fs, 38.13547087602444, 0.5003270373238773);
+    const f0 = 38.13547087602444;
+    const Q = 0.5003270373238773;
+    const K = Math.tan((Math.PI * f0) / fs);
+    const a0 = 1 + K / Q + K * K;
+    this.b0 = 1; this.b1 = -2; this.b2 = 1;
+    this.a1 = (2 * (K * K - 1)) / a0;
+    this.a2 = (1 - K / Q + K * K) / a0;
   }
 }

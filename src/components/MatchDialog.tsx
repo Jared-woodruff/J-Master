@@ -4,6 +4,9 @@
 import { useEffect, useRef } from 'react';
 import { useStore } from '../state/store';
 import { MATCH_EQ_CENTERS } from '../audio/dsp/params';
+import { lufsText } from '../lib/level-text';
+import { palette } from '../lib/palette';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 export function MatchDialog() {
   const open = useStore((s) => s.matchOpen);
@@ -18,26 +21,27 @@ export function MatchDialog() {
   const dragging = useStore((s) => s.fileDrag !== null && s.fileDrag.images < s.fileDrag.count) && !loading;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Correction-curve plot.
+  // Correction-curve plot. The canvas mounts afresh each time the sheet
+  // opens, so the plot redraws on open as well as on a new reference.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !matchRef) return;
+    if (!open || !canvas || !matchRef) return;
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = w * dpr; canvas.height = h * dpr;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const cs = getComputedStyle(document.documentElement);
-    ctx.fillStyle = cs.getPropertyValue('--surface-well').trim() || '#0A0B0D';
+    const pal = palette();
+    ctx.fillStyle = pal.well;
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = cs.getPropertyValue('--border-hairline').trim() || '#26292E';
+    ctx.fillStyle = pal.hair;
     ctx.fillRect(0, h / 2, w, 1);
     for (const db of [-6, -3, 3, 6]) {
       ctx.globalAlpha = 0.4;
       ctx.fillRect(0, h / 2 - (db / 8) * (h / 2), w, 1);
       ctx.globalAlpha = 1;
     }
-    ctx.strokeStyle = cs.getPropertyValue('--signal-500').trim() || '#FF4D00';
+    ctx.strokeStyle = pal.signal;
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     matchRef.deltaGains.forEach((g, i) => {
@@ -47,20 +51,22 @@ export function MatchDialog() {
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
-    ctx.fillStyle = cs.getPropertyValue('--graphite-400').trim() || '#878D93';
+    ctx.fillStyle = pal.spec;
     ctx.font = `8px 'IBM Plex Mono', monospace`;
     ctx.textBaseline = 'bottom';
     MATCH_EQ_CENTERS.forEach((f, i) => {
       const x = ((i + 0.5) / MATCH_EQ_CENTERS.length) * w;
       ctx.fillText(f >= 1000 ? `${f / 1000}K` : `${f}`, x - 8, h - 2);
     });
-  }, [matchRef]);
+  }, [matchRef, open]);
+
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
 
   if (!open || !source) return null;
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget && !loading) openMatch(false); }}>
-      <div className="dialog frame" role="dialog" aria-label="Reference match" style={{ width: 520 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Reference match" style={{ width: 520 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
@@ -93,7 +99,7 @@ export function MatchDialog() {
               <div className="row">
                 <span className="spec">LOUDNESS</span>
                 <span className="leader" />
-                <span className="spec-value">REF {matchRef.lufs.toFixed(1)} · SRC {source.lufs.toFixed(1)} LUFS</span>
+                <span className="spec-value">REF {lufsText(matchRef.lufs)} · SRC {lufsText(source.lufs)}</span>
               </div>
               <div className="row">
                 <span className="spec">WIDTH SUGGESTION</span>

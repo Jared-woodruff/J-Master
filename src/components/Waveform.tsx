@@ -7,8 +7,11 @@ import { engine } from '../audio/engine';
 import type { TempoCurve } from '../audio/engine';
 import { fadeGainAt } from '../audio/dsp/fades';
 import { palette } from '../lib/palette';
+import { lufsText } from '../lib/level-text';
 
 const RULER_H = 20;
+/** Surround layouts by channel count, as the spec line names them. */
+const SURROUND: Record<number, string> = { 3: '3.0', 4: 'QUAD', 5: '5.0', 6: '5.1', 8: '7.1' };
 const OVERVIEW_H = 11;
 const HANDLE = 9;
 
@@ -106,7 +109,7 @@ export function Waveform() {
   const setWaveView = useStore((s) => s.setWaveView);
   const gridEnabled = useStore((s) => s.gridEnabled);
   const setGridEnabled = useStore((s) => s.setGridEnabled);
-  const hasTempo = useStore((s) => s.tempo !== null);
+  const hasTempo = useStore((s) => (s.tempo?.bpm ?? 0) > 0);
   const loudnessLane = useStore((s) => s.loudnessLane);
   const setLoudnessLane = useStore((s) => s.setLoudnessLane);
   const tempoLane = useStore((s) => s.tempoLane);
@@ -187,21 +190,26 @@ export function Waveform() {
     let raf = 0;
     let w = 0, h = 0, dpr = 1;
 
-    const resize = () => {
-      dpr = window.devicePixelRatio || 1;
-      w = wrap.clientWidth;
-      h = wrap.clientHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
-
     // Skip frames when nothing observable moved: the signature covers every
     // input the canvas draws from, so a paused, untouched console costs
     // (almost) nothing per frame.
     let prevSig: unknown[] = [];
+
+    const resize = () => {
+      dpr = window.devicePixelRatio || 1;
+      w = wrap.clientWidth;
+      h = wrap.clientHeight;
+      const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+      // Setting a canvas's size clears it, even to the same size: repaint.
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+      prevSig = [];
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
 
     const draw = () => {
       raf = requestAnimationFrame(draw);
@@ -210,6 +218,8 @@ export function Waveform() {
       if (!wf || w === 0) return;
       const pal = palette();
       const v0 = view.current;
+      // A monitor-scale change moves devicePixelRatio without a resize.
+      if ((window.devicePixelRatio || 1) !== dpr) resize();
       const curSig: unknown[] = [
         st.playheadSec, st.playing, v0.start, v0.end, hoverX.current, dragMode.current,
         st.waveView, st.gridEnabled, st.loudnessLane, st.tempoLane, st.processedView, st.outSplit,
@@ -271,12 +281,13 @@ export function Waveform() {
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(sc, srcX, 0, srcW, sc.height, 0, topY, w, waveH);
         // Frequency gridlines at 100 Hz / 1 kHz / 10 kHz (log 20..20k).
-        ctx.fillStyle = 'rgba(255,255,255,0.16)';
-        ctx.font = `8px 'IBM Plex Mono', monospace`;
+        ctx.font = `9px 'IBM Plex Mono', monospace`;
         ctx.textBaseline = 'bottom';
         for (const [f, label] of [[100, '100'], [1000, '1K'], [10000, '10K']] as [number, string][]) {
           const y = topY + waveH * (1 - Math.log(f / 20) / Math.log(1000));
+          ctx.fillStyle = 'rgba(255,255,255,0.16)';
           ctx.fillRect(0, y, w, 1);
+          ctx.fillStyle = 'rgba(255,255,255,0.55)';
           ctx.fillText(label, 3, y - 1);
         }
       } else {
@@ -360,7 +371,7 @@ export function Waveform() {
               ctx.fillRect(x, topY, 1, waveH);
               const bar = Math.floor((i - tp.downbeat) / 4) + 1;
               if (barPx > 44 && bar >= 1) {
-                ctx.fillStyle = specMode ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.3)';
+                ctx.fillStyle = specMode ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.5)';
                 ctx.fillText(`${bar}`, x + 3, topY + waveH - 10);
               }
             } else if (barPx > 72) {
@@ -386,7 +397,7 @@ export function Waveform() {
             ctx.fillStyle = specMode ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.14)';
             ctx.fillRect(x, topY, 1, waveH);
             if (barPx > 44) {
-              ctx.fillStyle = specMode ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.3)';
+              ctx.fillStyle = specMode ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.5)';
               ctx.fillText(`${bar + 1}`, x + 3, topY + waveH - 10);
             }
             // beat ticks inside the bar when there's room
@@ -468,7 +479,7 @@ export function Waveform() {
           ctx.globalAlpha = 1;
         }
         ctx.fillStyle = colSpec;
-        ctx.font = `7px 'IBM Plex Mono', monospace`;
+        ctx.font = `8px 'IBM Plex Mono', monospace`;
         ctx.textBaseline = 'top';
         ctx.fillText(ppLane ? 'ST LUFS · SRC ▬ OUT —' : 'ST LUFS · SRC', 3, laneY + 2);
       }
@@ -488,7 +499,7 @@ export function Waveform() {
         const span = Math.max(0.5, hi - lo);
         const bpmToY = (b: number) => laneY + 12 + (1 - (b - lo) / span) * (laneH - 16);
         const laneLabel = `BPM · ${dr.refBpm.toFixed(1)} → ${dr.endBpm.toFixed(1)}`;
-        ctx.font = `7px 'IBM Plex Mono', monospace`;
+        ctx.font = `8px 'IBM Plex Mono', monospace`;
         ctx.textBaseline = 'top';
         const labelEnd = 3 + ctx.measureText(laneLabel).width;
         // drift regions: an amber wash, tagged where each begins
@@ -831,15 +842,24 @@ export function Waveform() {
       st().toggleLoop(secAt(e.clientX));
     };
     const onWheel = (e: WheelEvent) => {
+      // Shift+wheel arrives as horizontal movement on Windows, and trackpads
+      // swipe sideways: whichever axis moved more is the gesture.
+      const sideways = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1;
+      const d = (sideways ? e.deltaX : e.deltaY) * unit;
+      if (d === 0) return;
       e.preventDefault();
       const r = rect();
-      if (e.shiftKey) {
+      // A wheel notch is ~100 px of delta; a trackpad sends many small ones,
+      // so both pan and zoom scale with the delta (one notch = one step).
+      const notch = Math.max(-1, Math.min(1, d / 100));
+      if (e.shiftKey || sideways) {
         const len = view.current.end - view.current.start;
-        const shift = (e.deltaY > 0 ? 1 : -1) * len * 0.12;
+        const shift = notch * len * 0.12;
         clampView(view.current.start + shift, view.current.end + shift);
       } else {
         const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-        zoomBy(e.deltaY > 0 ? 1.3 : 1 / 1.3, frac);
+        zoomBy(Math.pow(1.3, notch), frac);
       }
     };
 
@@ -861,9 +881,12 @@ export function Waveform() {
 
   if (!source) return null;
 
+  const layout = source.channels === 1 ? 'MONO'
+    : source.channels === 2 ? 'STEREO'
+    : `${SURROUND[source.channels] ?? `${source.channels} CH`} → STEREO`;
   const specLine = `SOURCE · ${(source.originalSampleRate / 1000).toFixed(1)} KHZ${
     source.originalBitDepth ? ` · ${source.originalBitDepth} BIT` : ''
-  } · ${source.channels === 2 ? 'STEREO' : 'MONO'} · ${source.lufs.toFixed(1)} LUFS IN`;
+  } · ${layout} · ${lufsText(source.lufs)} IN`;
   const busyLine = specComputing ? 'ANALYSING SPECTRUM…'
     : processedView && previewPending ? 'RENDERING MASTER PREVIEW…'
     : null;
@@ -876,36 +899,36 @@ export function Waveform() {
         <span className={`spec wavehead-status ${busyLine ? 'busy' : ''}`}>{busyLine ?? specLine}</span>
         <div className="wave-controls" role="toolbar" aria-label="Waveform view">
           <span className="wseg">
-            <button className={waveView === 'wave' ? 'on' : ''} title="Waveform view"
+            <button className={waveView === 'wave' ? 'on' : ''} aria-pressed={waveView === 'wave'} title="Waveform view"
               onClick={() => setWaveView('wave')}>WAVE</button>
-            <button className={waveView === 'spec' ? 'on' : ''} title="Spectrogram of the source"
+            <button className={waveView === 'spec' ? 'on' : ''} aria-pressed={waveView === 'spec'} title="Spectrogram of the source"
               onClick={() => setWaveView('spec')}>SPEC</button>
           </span>
           <span className="wseg">
-            <button className={gridEnabled && hasTempo ? 'on' : ''} disabled={!hasTempo}
+            <button className={gridEnabled && hasTempo ? 'on' : ''} aria-pressed={gridEnabled && hasTempo} disabled={!hasTempo}
               title="Bar and beat grid from the detected tempo"
               onClick={() => setGridEnabled(!gridEnabled)}>GRID</button>
-            <button className={loudnessLane ? 'on' : ''}
+            <button className={loudnessLane ? 'on' : ''} aria-pressed={loudnessLane}
               title="Short-term loudness lane"
               onClick={() => setLoudnessLane(!loudnessLane)}>LUFS</button>
             {drifting && (
-              <button className={tempoLane ? 'on' : ''}
+              <button className={tempoLane ? 'on' : ''} aria-pressed={tempoLane}
                 title="Tempo lane: where the tempo drifts from the tempo the track set out at"
                 onClick={() => setTempoLane(!tempoLane)}>BPM</button>
             )}
           </span>
           <span className="wseg">
-            <button className={processedView ? 'on' : ''}
+            <button className={processedView ? 'on' : ''} aria-pressed={processedView}
               title="Show the processed master's waveform and loudness (re-renders as you adjust)"
               onClick={() => setProcessedView(!processedView)}>OUT</button>
             {processedView && (
-              <button className={outSplit ? 'on' : ''}
+              <button className={outSplit ? 'on' : ''} aria-pressed={outSplit}
                 title="Split compare: source above, master below"
                 onClick={() => setOutSplit(!outSplit)}>SPLIT</button>
             )}
           </span>
           <span className="wseg">
-            <button className={loopOn ? 'on' : ''}
+            <button className={loopOn ? 'on' : ''} aria-pressed={loopOn}
               title="Loop the section under the playhead · L · or double-click the waveform"
               onClick={() => toggleLoop()}>LOOP</button>
           </span>
@@ -923,7 +946,7 @@ export function Waveform() {
         {loading && (
           <div className="wave-loading" role="status">
             <span className="spec" title={loadingName ?? undefined}
-              style={{ maxWidth: '80%', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-body)' }}>
+              style={{ maxWidth: '80%', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--well-text)' }}>
               LOADING {(loadingName ?? '').toUpperCase()}
             </span>
             <div className="loadbar"><span /></div>

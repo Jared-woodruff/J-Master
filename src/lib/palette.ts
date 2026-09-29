@@ -11,6 +11,8 @@ export interface CanvasPalette {
   spec: string;
   src: string;
   warn: string;
+  /** Text drawn over a well. */
+  text: string;
 }
 
 let cached: CanvasPalette | null = null;
@@ -25,10 +27,13 @@ export function palette(): CanvasPalette {
       bar: s.getPropertyValue('--wave-bar').trim() || '#3D4248',
       rms: s.getPropertyValue('--wave-rms').trim() || '#565B61',
       signal: s.getPropertyValue('--signal-500').trim() || '#FF4D00',
-      hair: s.getPropertyValue('--border-hairline').trim() || '#26292E',
+      // Wells are dark in both themes: their rules and traces never follow
+      // the page's (light, in PAPER) hairline.
+      hair: s.getPropertyValue('--well-hair').trim() || '#26292E',
       spec: s.getPropertyValue('--graphite-400').trim() || '#878D93',
-      src: s.getPropertyValue('--graphite-300').trim() || '#AFB3B8',
+      src: s.getPropertyValue('--well-src').trim() || '#AFB3B8',
       warn: s.getPropertyValue('--warn-500').trim() || '#E8A200',
+      text: s.getPropertyValue('--well-text').trim() || '#FBFAF7',
     };
     cachedTheme = theme;
   }

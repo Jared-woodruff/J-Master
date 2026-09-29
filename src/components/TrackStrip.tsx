@@ -1,5 +1,6 @@
 import { useStore } from '../state/store';
 import { driftRange, mmss } from '../lib/tempo-text';
+import { lufsText } from '../lib/level-text';
 
 function fmtTime(sec: number, ms = true): string {
   const m = Math.floor(sec / 60);
@@ -38,7 +39,7 @@ export function TrackStrip() {
         <button
           className={playing ? 'play-on' : ''}
           onClick={togglePlay}
-          title={playing ? 'Pause (Space)' : 'Play (Space)'}
+          title={playing ? 'Pause · Space' : 'Play · Space'}
           aria-label={playing ? 'Pause' : 'Play'}
         >
           {playing ? '❚❚' : '▶'}
@@ -53,7 +54,7 @@ export function TrackStrip() {
       <div className="trackmeta">
         <div className="name" title={source.name}>{source.name}</div>
         <div className="specs">
-          <span className="spec">IN {source.lufs.toFixed(1)} LUFS</span>
+          <span className="spec">IN {lufsText(source.lufs)}</span>
           <span className="spec">{(source.originalSampleRate / 1000).toFixed(1)}K{source.originalBitDepth ? `/${source.originalBitDepth}` : ''}→48K</span>
           {tempo?.drift ? (
             <span className="spec" style={{ color: 'var(--warn-500)' }}
@@ -61,8 +62,11 @@ export function TrackStrip() {
               {driftRange(tempo.drift)}
             </span>
           ) : (
-            <span className="spec" style={tempo && tempo.confidence > 0.25 ? { color: 'var(--text-body)' } : undefined}>
-              {tempo ? `${tempo.bpm.toFixed(1)} BPM${tempo.confidence < 0.25 ? ' ?' : ''}` : '… BPM'}
+            <span className="spec" style={tempo && tempo.confidence > 0.25 ? { color: 'var(--text-body)' } : undefined}
+              title={!tempo ? 'Measuring the tempo'
+                : tempo.bpm <= 0 ? 'No steady pulse to measure'
+                : tempo.confidence < 0.25 ? 'A weak pulse: this tempo is a best guess' : undefined}>
+              {!tempo ? '… BPM' : tempo.bpm <= 0 ? '— BPM' : `${tempo.bpm.toFixed(1)} BPM${tempo.confidence < 0.25 ? ' ?' : ''}`}
             </span>
           )}
         </div>
@@ -90,7 +94,7 @@ export function TrackStrip() {
             {masterItBusy ? 'THINKING…' : 'AUTO →'}
           </button>
           <button
-            className={`btn btn-sm btn-toggle ${matchActive ? 'on' : ''}`}
+            className={`btn btn-sm btn-toggle ${matchActive ? 'on' : ''}`} aria-pressed={matchActive}
             onClick={() => useStore.getState().openMatch(true)}
             title="Match this master to a reference track you trust"
           >
@@ -100,7 +104,7 @@ export function TrackStrip() {
         {/* Listen */}
         <div className="strip-group">
           <button
-            className={`btn btn-sm btn-toggle ${bypass ? 'on' : ''}`}
+            className={`btn btn-sm btn-toggle ${bypass ? 'on' : ''}`} aria-pressed={bypass}
             onClick={() => setBypass(!bypass)}
             title="Hear the untouched source, loudness-matched · R · hold R for a momentary compare"
           >
@@ -108,7 +112,7 @@ export function TrackStrip() {
             REF
           </button>
           <button
-            className={`btn btn-sm btn-toggle ${limiterDelta ? 'on' : ''}`}
+            className={`btn btn-sm btn-toggle ${limiterDelta ? 'on' : ''}`} aria-pressed={limiterDelta}
             onClick={() => setLimiterDelta(!limiterDelta)}
             title="Hear only what the limiter is removing · never exported"
             disabled={bypass}
@@ -117,12 +121,14 @@ export function TrackStrip() {
             LIM Δ
           </button>
           <button
-            className={`btn btn-sm btn-toggle ${metronome ? 'on' : ''}`}
+            className={`btn btn-sm btn-toggle ${metronome ? 'on' : ''}`} aria-pressed={metronome}
             onClick={() => setMetronome(!metronome)}
             title={tempo?.drift
               ? 'Metronome on the tracked beats, following the drift · never exported'
-              : tempo ? `Metronome click at ${tempo.bpm.toFixed(1)} BPM · never exported` : 'Metronome · waiting for tempo detection'}
-            disabled={!tempo}
+              : !tempo ? 'Metronome · waiting for tempo detection'
+              : tempo.bpm <= 0 ? 'Metronome · no steady pulse in this track to click to'
+              : `Metronome click at ${tempo.bpm.toFixed(1)} BPM · never exported`}
+            disabled={!tempo || tempo.bpm <= 0}
           >
             <span className={`lamp ${metronome ? 'signal' : ''}`} />
             CLICK

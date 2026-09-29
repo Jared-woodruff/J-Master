@@ -1,15 +1,62 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
-import { readFile, writeFile, appendFile, open } from 'node:fs/promises';
-import { join, basename, extname } from 'node:path';
+import { readFile, writeFile, appendFile, open, rename, unlink } from 'node:fs/promises';
+import { join, basename, extname, dirname, isAbsolute, resolve } from 'node:path';
 
 let win: BrowserWindow | null = null;
 let pendingOpenPath: string | null = null;
+
+// ── paths the renderer may touch ─────────────────────────────────────────
+// Network (UNC) and device paths reach other machines, and Windows signs in
+// to them with the user's credentials, so a path read out of a shared
+// project must never open one by itself. Local paths are fine; a network
+// path only once the user chose it this session (a dialog, a drop, the
+// launch arguments), or the folder it sits in.
+const granted = new Set<string>();
+const pathKey = (p: string) => resolve(p).toLowerCase();
+const isNetworkPath = (p: string) => /^[\\/]{2}/.test(p);
+
+function grantPath(p: string): void {
+  if (typeof p !== 'string' || !isAbsolute(p)) return;
+  granted.add(pathKey(p));
+  granted.add(pathKey(dirname(p)));
+}
+
+function checkPath(p: unknown): string {
+  if (typeof p !== 'string' || p.length === 0 || !isAbsolute(p) || p.includes('\0')) {
+    throw new Error('EACCES: not an absolute path');
+  }
+  if (isNetworkPath(p) && !granted.has(pathKey(p)) && !granted.has(pathKey(dirname(p)))) {
+    throw new Error('EACCES: network path not chosen by the user');
+  }
+  return p;
+}
+
+/** Only the album image being written may be appended to or patched. */
+const writable = new Set<string>();
+
+/** `name` in `dir`, numbered " (2)", " (3)"… past files that already exist. */
+async function writeUnique(dir: string, name: string, data: Buffer): Promise<string> {
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 1; ; n++) {
+    const full = join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
+    try {
+      await writeFile(full, data, { flag: 'wx' });
+      return full;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || n >= 999) throw err;
+    }
+  }
+}
+
+const safeName = (name: string) => String(name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 
 function projectPathFromArgv(argv: string[]): string | null {
   return argv.find((a) => a.toLowerCase().endsWith('.jmaster')) ?? null;
 }
 
 function deliverOpenPath(path: string): void {
+  grantPath(path);
   if (win && !win.webContents.isLoading()) {
     win.webContents.send('jmaster:openPath', path);
   } else {
@@ -32,13 +79,14 @@ function createWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
   win.once('ready-to-show', () => win?.show());
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  // The dev server only ever serves an unpackaged build.
+  const devUrl = app.isPackaged ? undefined : process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     void win.loadURL(devUrl);
     win.webContents.openDevTools({ mode: 'detach' });
@@ -46,11 +94,14 @@ function createWindow(): void {
     void win.loadFile(join(__dirname, '../dist/index.html'));
   }
 
-  // External links go to the system browser, never a new Electron window.
+  // External links go to the system browser, never a new Electron window,
+  // and the window itself never navigates away from the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url);
     return { action: 'deny' };
   });
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.on('will-redirect', (e) => e.preventDefault());
 
   win.webContents.on('did-finish-load', () => {
     if (pendingOpenPath) {
@@ -79,7 +130,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     createWindow();
     const p = projectPathFromArgv(process.argv);
-    if (p) pendingOpenPath = p;
+    if (p) { grantPath(p); pendingOpenPath = p; }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -104,6 +155,7 @@ ipcMain.handle('jmaster:openFile', async () => {
   });
   if (res.canceled || res.filePaths.length === 0) return null;
   const path = res.filePaths[0];
+  grantPath(path);
   const data = await readFile(path);
   return {
     name: basename(path),
@@ -120,33 +172,59 @@ ipcMain.handle('jmaster:saveProject', async (_e, defaultName: string, json: stri
     filters: [{ name: 'J-Master project', extensions: ['jmaster'] }],
   });
   if (res.canceled || !res.filePath) return null;
+  grantPath(res.filePath);
   await writeFile(res.filePath, json, 'utf8');
   return res.filePath;
 });
 
 ipcMain.on('jmaster:showInFolder', (_e, path: string) => {
-  shell.showItemInFolder(path);
+  try { shell.showItemInFolder(checkPath(path)); } catch { /* not ours to open */ }
 });
 
-// Streaming file writes for large album images.
+// A path the user just handed over (a dropped file, a recent file they
+// clicked): network paths become usable for this session.
+ipcMain.on('jmaster:allowPath', (_e, path: string) => grantPath(path));
+
+// Album images stream in: written as "<name>.partial", appended to and
+// patched, then committed over the final name, so a failed assembly never
+// costs the previous image.
 ipcMain.handle('jmaster:writeFileNew', async (_e, dir: string, name: string, data: ArrayBuffer) => {
-  const safe = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-  const full = join(dir, safe);
+  const full = join(checkPath(dir), safeName(name));
   await writeFile(full, Buffer.from(data));
+  writable.add(pathKey(full));
   return full;
 });
 
 ipcMain.handle('jmaster:appendFile', async (_e, path: string, data: ArrayBuffer) => {
+  if (!writable.has(pathKey(checkPath(path)))) throw new Error('EACCES: not a file the app is writing');
   await appendFile(path, Buffer.from(data));
 });
 
 ipcMain.handle('jmaster:patchFile', async (_e, path: string, offset: number, data: ArrayBuffer) => {
+  if (!writable.has(pathKey(checkPath(path)))) throw new Error('EACCES: not a file the app is writing');
   const fh = await open(path, 'r+');
   try {
     await fh.write(Buffer.from(data), 0, data.byteLength, offset);
   } finally {
     await fh.close();
   }
+});
+
+/** Moves a finished `.partial` over its final name; returns the final path. */
+ipcMain.handle('jmaster:commitFile', async (_e, path: string) => {
+  const from = checkPath(path);
+  if (!writable.has(pathKey(from)) || !from.endsWith('.partial')) throw new Error('EACCES: not a partial file');
+  const to = from.slice(0, -'.partial'.length);
+  await rename(from, to);
+  writable.delete(pathKey(from));
+  return to;
+});
+
+ipcMain.handle('jmaster:discardFile', async (_e, path: string) => {
+  const p = checkPath(path);
+  if (!writable.has(pathKey(p))) return;
+  writable.delete(pathKey(p));
+  await unlink(p).catch(() => undefined);
 });
 
 // The file-type filter follows the export format (it used to say WAV for
@@ -167,6 +245,7 @@ ipcMain.handle('jmaster:saveFile', async (_e, defaultName: string, data: ArrayBu
     filters: [SAVE_FILTERS[ext] ?? SAVE_FILTERS.wav],
   });
   if (res.canceled || !res.filePath) return null;
+  grantPath(res.filePath);
   await writeFile(res.filePath, Buffer.from(data));
   return res.filePath;
 });
@@ -183,11 +262,12 @@ ipcMain.handle('jmaster:pickFiles', async () => {
     ],
   });
   if (res.canceled) return null;
+  res.filePaths.forEach(grantPath);
   return res.filePaths.map((p) => ({ name: basename(p), path: p }));
 });
 
 ipcMain.handle('jmaster:readFileByPath', async (_e, path: string) => {
-  const data = await readFile(path);
+  const data = await readFile(checkPath(path));
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 });
 
@@ -198,14 +278,14 @@ ipcMain.handle('jmaster:chooseDirectory', async () => {
     properties: ['openDirectory', 'createDirectory'],
   });
   if (res.canceled || res.filePaths.length === 0) return null;
+  granted.add(pathKey(res.filePaths[0]));
   return res.filePaths[0];
 });
 
+// Masters saved into a folder never replace a file already there (a source
+// track, another master): a taken name gets " (2)", " (3)"…
 ipcMain.handle('jmaster:saveFileTo', async (_e, dir: string, name: string, data: ArrayBuffer) => {
-  const safe = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-  const full = join(dir, safe);
-  await writeFile(full, Buffer.from(data));
-  return full;
+  return writeUnique(checkPath(dir), safeName(name), Buffer.from(data));
 });
 
 ipcMain.on('jmaster:window', (_e, action: string) => {

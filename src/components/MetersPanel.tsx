@@ -71,7 +71,7 @@ export function MetersPanel() {
           {MONITOR_MODES.map((mode) => (
             <button
               key={mode.id}
-              className={monitor === mode.id ? 'on' : ''}
+              className={monitor === mode.id ? 'on' : ''} aria-pressed={monitor === mode.id}
               title={mode.id === 'stereo'
                 ? 'Monitor the stereo master'
                 : `Monitor ${mode.id === 'mono' ? 'the mono fold-down' : mode.id === 'side' ? 'the side signal only' : `the ${mode.id} channel only`} (never exported)`}
@@ -87,7 +87,7 @@ export function MetersPanel() {
             return (
               <button
                 key={p.label}
-                className={normPreview === p.id ? 'on' : ''}
+                className={normPreview === p.id ? 'on' : ''} aria-pressed={normPreview === p.id}
                 title={plat
                   ? `Hear it as ${p.name} plays it: ${turn < 0 ? `turned down ${Math.abs(turn).toFixed(1)} dB to ${plat.targetLufs} LUFS` : 'plays as mastered'} · playback only, never exported`
                   : 'Hear the master at its own level'}
@@ -142,17 +142,17 @@ export function MetersPanel() {
         <div className="meter-sep" />
         <div className="boxlabel" style={{ alignItems: 'center' }}>
           <span className="seg tabseg" role="tablist" aria-label="Analyser view">
-            <button role="tab" aria-selected={meterView === 'spectrum'} className={meterView === 'spectrum' ? 'on' : ''}
+            <button role="tab" aria-selected={meterView === 'spectrum'} className={meterView === 'spectrum' ? 'on' : ''} aria-pressed={meterView === 'spectrum'}
               title="Live spectrum: the master against the loudness-matched source"
               onClick={() => setMeterView('spectrum')}>SPECTRUM</button>
-            <button role="tab" aria-selected={meterView === 'scope'} className={meterView === 'scope' ? 'on' : ''}
+            <button role="tab" aria-selected={meterView === 'scope'} className={meterView === 'scope' ? 'on' : ''} aria-pressed={meterView === 'scope'}
               title="Vectorscope: mono is a vertical line, width spreads it sideways, phase trouble leans horizontal"
               onClick={() => setMeterView('scope')}>SCOPE</button>
           </span>
           {meterView === 'spectrum' ? (
             <span className="spec">
               <span style={{ color: 'var(--signal-500)' }}>■</span> OUT&nbsp;&nbsp;
-              <span style={{ color: 'var(--text-secondary)' }}>—</span> SRC
+              <span style={{ color: 'var(--well-src)' }}>—</span> SRC
             </span>
           ) : (
             <span className="spec">M · S · AUTO GAIN</span>
@@ -298,11 +298,18 @@ function Spectrum() {
     const ctx = canvas.getContext('2d')!;
     let raf = 0;
     let w = 0, h = 0, dpr = 1;
+    // Set by every resize: a canvas clears whenever its size is assigned,
+    // so the next frame paints even while paused.
+    let fresh = true;
     const resize = () => {
       dpr = window.devicePixelRatio || 1;
       w = wrap.clientWidth; h = wrap.clientHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
+      const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+      if (canvas.width !== cw || canvas.height !== ch) {
+        canvas.width = cw;
+        canvas.height = ch;
+      }
+      fresh = true;
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -331,9 +338,11 @@ function Spectrum() {
     const draw = () => {
       raf = requestAnimationFrame(draw);
       if (w === 0) return;
+      if ((window.devicePixelRatio || 1) !== dpr) resize();
       const pal = palette();
       const playing = useStore.getState().playing;
-      if (!playing && idleFrames > 5 && pal === lastPal && w === lastW && h === lastH) return;
+      if (!playing && !fresh && idleFrames > 5 && pal === lastPal && w === lastW && h === lastH) return;
+      fresh = false;
       idleFrames = playing ? 0 : idleFrames + 1;
       lastPal = pal;
       lastW = w; lastH = h;

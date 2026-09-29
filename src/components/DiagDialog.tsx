@@ -9,6 +9,8 @@ import type { DiagIssue } from '../state/store';
 import type { TempoInfo, TempoDrift } from '../audio/engine';
 import { PLATFORMS } from '../audio/dsp/params';
 import { driftDelta, mmss, slipText } from '../lib/tempo-text';
+import { dbtpText, lufsText } from '../lib/level-text';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 /** The tempo curve at a glance: the reference, the curve, the drift. */
 function DriftChart({ tempo, drift, durSec }: { tempo: TempoInfo; drift: TempoDrift; durSec: number }) {
@@ -65,6 +67,8 @@ export function DiagDialog() {
   const balanceDb = useStore((s) => s.balanceDb);
   const tempo = useStore((s) => s.tempo);
 
+  const sheetRef = useSheetFocus<HTMLDivElement>(open);
+
   if (!open || !source) return null;
   const drift = tempo?.drift ?? null;
   const flagged = checks.filter((c) => !c.pass).length;
@@ -105,7 +109,7 @@ export function DiagDialog() {
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) openDiag(false); }}>
-      <div className="dialog frame" role="dialog" aria-label="Track diagnosis" style={{ width: 520 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Track diagnosis" style={{ width: 520 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
@@ -217,7 +221,7 @@ export function DiagDialog() {
           <div className="row">
             <span className="spec">INTEGRATED / TRUE PEAK</span>
             <span className="leader" />
-            <span className="spec-value">{source.lufs.toFixed(1)} LUFS · {source.truePeakDb.toFixed(1)} dBTP</span>
+            <span className="spec-value">{lufsText(source.lufs)} · {dbtpText(source.truePeakDb)}</span>
           </div>
           <div className="row">
             <span className="spec">PLR (PEAK − LOUDNESS)</span>
@@ -244,7 +248,7 @@ export function DiagDialog() {
                 <span className="leader" />
                 <span className="spec-value" style={delta > 2 ? { color: 'var(--warn-500)' } : undefined}>
                   {delta > 0.2 ? `TURNED DOWN ${delta.toFixed(1)} dB`
-                    : delta < -0.2 ? `PLAYED ${Math.abs(delta).toFixed(1)} dB UNDER — NOT BOOSTED`
+                    : delta < -0.2 ? `PLAYED ${Math.abs(delta).toFixed(1)} dB UNDER · NOT BOOSTED`
                     : 'PLAYS AS MASTERED'}
                 </span>
               </div>
@@ -254,7 +258,7 @@ export function DiagDialog() {
 
         <div className="drow" style={{ justifyContent: 'space-between' }}>
           <button
-            className={`btn btn-sm btn-toggle ${autoFix ? 'on' : ''}`}
+            className={`btn btn-sm btn-toggle ${autoFix ? 'on' : ''}`} aria-pressed={autoFix}
             onClick={() => setAutoFix(!autoFix)}
             title="Apply detected fixes automatically whenever a track loads"
           >

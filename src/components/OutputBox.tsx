@@ -24,7 +24,7 @@ export function OutputBox() {
         {PLATFORMS.map((p) => (
           <button
             key={p.id}
-            className={platformId === p.id ? 'on' : ''}
+            className={platformId === p.id ? 'on' : ''} aria-pressed={platformId === p.id}
             onClick={() => applyPlatform(p.id)}
             title={p.spec}
           >
@@ -33,39 +33,44 @@ export function OutputBox() {
         ))}
       </div>
       <div className="target-row">
-        <div>
-          <div className="spec">TARGET</div>
-          <div className="big">{targetLufs.toFixed(1)} <span className="spec">LUFS</span></div>
+        <div className="tgroup">
+          <div className="spec">TARGET · LUFS</div>
+          <div className="tval">
+            <span className="big">{targetLufs.toFixed(1)}</span>
+            <div className="stepper">
+              <button onClick={() => nudgeTarget(-0.5)} aria-label="Lower target">−</button>
+              <button onClick={() => nudgeTarget(0.5)} aria-label="Raise target">+</button>
+            </div>
+          </div>
         </div>
-        <div className="stepper">
-          <button onClick={() => nudgeTarget(-0.5)} aria-label="Lower target">−</button>
-          <button onClick={() => nudgeTarget(0.5)} aria-label="Raise target">+</button>
-        </div>
-        <div>
-          <div className="spec">CEILING</div>
-          <div className="big">{ceilingDb.toFixed(1)} <span className="spec">dBTP</span></div>
-        </div>
-        <div className="stepper">
-          <button onClick={() => nudgeCeiling(-0.1)} aria-label="Lower ceiling">−</button>
-          <button onClick={() => nudgeCeiling(0.1)} aria-label="Raise ceiling">+</button>
+        <div className="tgroup">
+          <div className="spec">CEILING · dBTP</div>
+          <div className="tval">
+            <span className="big">{ceilingDb.toFixed(1)}</span>
+            <div className="stepper">
+              <button onClick={() => nudgeCeiling(-0.1)} aria-label="Lower ceiling">−</button>
+              <button onClick={() => nudgeCeiling(0.1)} aria-label="Raise ceiling">+</button>
+            </div>
+          </div>
         </div>
       </div>
       <div className="target-row">
-        <div>
-          <div className="spec">BALANCE</div>
-          <div className="big" style={{ fontSize: 14 }}>
-            {balanceDb === 0 ? 'CENTER' : `${balanceDb < 0 ? 'L' : 'R'} ${Math.abs(balanceDb).toFixed(1)}`}
-            {' '}<span className="spec">dB</span>
+        <div className="tgroup">
+          <div className="spec">BALANCE · dB</div>
+          <div className="tval">
+            <span className="big" style={{ fontSize: 14 }}>
+              {balanceDb === 0 ? 'CENTER' : `${balanceDb < 0 ? 'L' : 'R'} ${Math.abs(balanceDb).toFixed(1)}`}
+            </span>
+            <div className="stepper">
+              <button onClick={() => setBalance(balanceDb - 0.1)} aria-label="Shift left">−</button>
+              <button onClick={() => setBalance(balanceDb + 0.1)} aria-label="Shift right">+</button>
+            </div>
           </div>
-        </div>
-        <div className="stepper">
-          <button onClick={() => setBalance(balanceDb - 0.1)} aria-label="Shift left">−</button>
-          <button onClick={() => setBalance(balanceDb + 0.1)} aria-label="Shift right">+</button>
         </div>
         <button
           className="btn btn-sm btn-secondary"
           disabled={!loaded || Math.abs(balanceOffset) < 0.05}
-          title={`Source image leans ${balanceOffset >= 0 ? 'right' : 'left'} by ${Math.abs(balanceOffset).toFixed(1)} dB — correct it`}
+          title={`Source image leans ${balanceOffset >= 0 ? 'right' : 'left'} by ${Math.abs(balanceOffset).toFixed(1)} dB · correct it`}
           onClick={autoCenter}
         >
           AUTO-CENTER

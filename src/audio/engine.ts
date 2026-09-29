@@ -1,7 +1,7 @@
 // Main-thread audio engine: owns the AudioContext (48 kHz), the worklet
 // playback node, the analysers for the spectrum, the source buffers, and the
 // offline render workers. All UI actions route through here.
-import { ChainParams, NOMINAL_LUFS } from './dsp/params';
+import { ChainParams, NOMINAL_LUFS, stagingGainDbFor } from './dsp/params';
 import type { EncodeOptions } from './encode';
 import type { SongSection, TempoCurve, TempoDrift } from './analysis/tempo';
 
@@ -37,6 +37,8 @@ export interface SourceInfo {
   balanceOffsetDb: number;
   /** Source pathology measurements (AI-music checks). */
   diagnostics: SourceDiagnostics;
+  /** NaN/∞ samples in the file, replaced with silence on load. */
+  repairedSamples: number;
 }
 
 export interface SourceDiagnostics {
@@ -51,6 +53,7 @@ export interface SourceDiagnostics {
 }
 
 export interface TempoInfo {
+  /** 0 when the track has no pulse to measure (silence, a drone, a blip). */
   bpm: number;
   firstBeatSec: number;
   firstBarSec: number;
@@ -84,6 +87,8 @@ export interface ExportStats {
   samplePeakDb: number;
   appliedGainDb: number;
   limiterMaxGrDb: number;
+  /** False when the source was too quiet (or short) to measure: unity gain. */
+  loudnessMeasured?: boolean;
   durationSec: number;
   sampleRate: number;
   bitDepth: number;
@@ -137,6 +142,7 @@ export class AudioEngine {
   private renderHandlers: {
     onProgress: (p: ExportProgress) => void;
     onDone: (result: RenderResult) => void;
+    onError: (message: string) => void;
   } | null = null;
 
   // Preview-gain calibration state.
@@ -237,9 +243,29 @@ export class AudioEngine {
     return ctx;
   }
 
+  /**
+   * A worker that crashes (out of memory on a huge file, say) must still
+   * answer everything it owed, or a load, a tempo or an export would wait
+   * forever; the next request starts a fresh one.
+   */
+  private failMainWorker(): void {
+    const w = this.worker;
+    this.worker = null;
+    w?.terminate();
+    this.rendering = false;
+    const h = this.renderHandlers;
+    this.renderHandlers = null;
+    h?.onError('THE AUDIO WORKER STOPPED');
+    for (const f of this.analyzeWaiters.splice(0)) f({ type: 'analyzed', failed: true });
+    for (const f of this.tempoWaiters.splice(0)) f({ type: 'tempo', bpm: 0 });
+    for (const f of this.spectrogramWaiters.splice(0)) f({ type: 'spectrogram', failed: true });
+  }
+
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     this.worker = new Worker('./audio/jmaster-render-worker.js');
+    this.worker.onerror = () => this.failMainWorker();
+    this.worker.onmessageerror = () => this.failMainWorker();
     this.worker.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'analyzed') {
@@ -248,12 +274,14 @@ export class AudioEngine {
         this.renderHandlers.onProgress({ phase: d.phase, pct: d.pct });
       } else if (d.type === 'done' && this.renderHandlers) {
         this.rendering = false;
-        this.renderHandlers.onDone({ data: d.wav, ext: d.ext, mime: d.mime, stats: d.stats, extras: d.extras ?? [] });
+        const h = this.renderHandlers;
         this.renderHandlers = null;
+        h.onDone({ data: d.wav, ext: d.ext, mime: d.mime, stats: d.stats, extras: d.extras ?? [] });
       } else if (d.type === 'render-error' && this.renderHandlers) {
         this.rendering = false;
-        this.renderHandlers.onProgress({ phase: `FAILED · ${d.message}`, pct: 1 });
+        const h = this.renderHandlers;
         this.renderHandlers = null;
+        h.onError(String(d.message));
       } else if (d.type === 'calibrated') {
         if (d.seq === this.calibSeq) {
           this.chainDeltaDb = Math.max(-8, Math.min(8, d.chainDeltaDb));
@@ -278,7 +306,7 @@ export class AudioEngine {
   loadFile(data: ArrayBuffer, name: string, onPhase?: (phase: string) => void): Promise<SourceInfo | null> {
     const seq = ++this.loadSeq;
     const run = this.loadQueue.then(() =>
-      (seq === this.loadSeq ? this.loadFileNow(data, name, onPhase) : null));
+      (seq === this.loadSeq ? this.loadFileNow(data, name, seq, onPhase) : null));
     this.loadQueue = run.catch(() => undefined);
     return run;
   }
@@ -286,15 +314,19 @@ export class AudioEngine {
   private async loadFileNow(
     data: ArrayBuffer,
     name: string,
+    seq: number,
     onPhase?: (phase: string) => void,
-  ): Promise<SourceInfo> {
-    const originalBitDepth = sniffWavBitDepth(data);
+  ): Promise<SourceInfo | null> {
+    const original = sniffFormat(data);
     onPhase?.('DECODING');
     const ctx = await this.ensureContext();
     // decodeAudioData resamples to the context rate (48 kHz) for us. Decode
     // before touching any state, so an unreadable file leaves the current
     // track fully intact.
     const decoded = await ctx.decodeAudioData(data.slice(0));
+    // A newer load arrived while this one decoded: it wins, and this one
+    // must not swap the engine to a track the console will never show.
+    if (seq !== this.loadSeq) return null;
     onPhase?.('ANALYSING LOUDNESS · PEAKS · STEREO');
     this.gen++;
     this.spectrogram = null;
@@ -304,10 +336,9 @@ export class AudioEngine {
     this.sourceProfile = null;
     this.clearProcessedPreview();
     const channels = decoded.numberOfChannels;
-    const L = decoded.getChannelData(0);
-    const R = channels > 1 ? decoded.getChannelData(1) : decoded.getChannelData(0);
-    this.srcL = new Float32Array(L);
-    this.srcR = new Float32Array(R);
+    const stereo = toStereo(decoded);
+    this.srcL = stereo.l;
+    this.srcR = stereo.r;
 
     // Worklet gets its own copy (transferred).
     const wl = new Float32Array(this.srcL);
@@ -325,6 +356,7 @@ export class AudioEngine {
         [al.buffer, ar.buffer],
       );
     });
+    if (analyzed.failed) throw new Error('analysis failed');
 
     this.waveform = {
       levels: analyzed.levels.map((lv: any) => ({
@@ -358,13 +390,17 @@ export class AudioEngine {
       this.excerptL = this.srcL.slice(startSample, startSample + excerptLen);
       this.excerptR = this.srcR.slice(startSample, startSample + excerptLen);
       this.chainDeltaDb = 0;
+      // A calibration still out for the previous track must not land here.
+      this.calibSeq++;
+      if (this.calibTimer) { clearTimeout(this.calibTimer); this.calibTimer = null; }
     }
     this.source = {
       name,
       durationSec: decoded.duration,
       sampleRate: TARGET_RATE,
-      originalSampleRate: sniffWavSampleRate(data) ?? decoded.sampleRate,
-      originalBitDepth,
+      originalSampleRate: original.sampleRate ?? decoded.sampleRate,
+      originalBitDepth: original.bitDepth,
+      repairedSamples: stereo.repaired,
       channels,
       lufs: analyzed.lufs,
       lra: analyzed.lra ?? 0,
@@ -398,9 +434,10 @@ export class AudioEngine {
     const src = this.source;
     const params: ChainParams = {
       ...p,
-      stagingGainDb: src ? NOMINAL_LUFS - src.lufs : 0,
-      outputGainDb: p.targetLufs - NOMINAL_LUFS - this.chainDeltaDb,
-      refOutputGainDb: p.targetLufs - NOMINAL_LUFS,
+      stagingGainDb: src ? stagingGainDbFor(src.lufs) : 0,
+      // A source with no measurable loudness plays at unity, as it exports.
+      outputGainDb: src && src.lufs <= -70 ? 0 : p.targetLufs - NOMINAL_LUFS - this.chainDeltaDb,
+      refOutputGainDb: src && src.lufs <= -70 ? 0 : p.targetLufs - NOMINAL_LUFS,
       songLengthSec: src ? src.durationSec : 0,
     };
     this.node.port.postMessage({ type: 'params', params });
@@ -491,6 +528,7 @@ export class AudioEngine {
         [cl.buffer, cr.buffer],
       );
     });
+    if (d.type === 'render-error') throw new Error(d.message);
     return { bands: new Float32Array(d.bands), lufs: d.lufs, sideRatioDb: d.sideRatioDb };
   }
 
@@ -519,19 +557,18 @@ export class AudioEngine {
     const r = new Float32Array(this.srcR);
     const pending = new Promise<TempoInfo | null>((resolve) => {
       this.tempoWaiters.push((d) => {
-        const t: TempoInfo | null = d.bpm > 0
-          ? {
-              bpm: d.bpm,
-              firstBeatSec: d.firstBeatSec,
-              firstBarSec: d.firstBarSec ?? d.firstBeatSec,
-              confidence: d.confidence,
-              sections: d.sections ?? [],
-              curve: d.curve ?? null,
-              beats: d.beats ?? [],
-              downbeat: d.downbeat ?? 0,
-              drift: d.drift ?? null,
-            }
-          : null;
+        // bpm 0: measured, and there is no pulse (the sections still hold).
+        const t: TempoInfo = {
+          bpm: d.bpm > 0 ? d.bpm : 0,
+          firstBeatSec: d.firstBeatSec ?? 0,
+          firstBarSec: d.firstBarSec ?? d.firstBeatSec ?? 0,
+          confidence: d.bpm > 0 ? d.confidence : 0,
+          sections: d.sections ?? [],
+          curve: d.curve ?? null,
+          beats: d.beats ?? [],
+          downbeat: d.downbeat ?? 0,
+          drift: d.drift ?? null,
+        };
         if (gen !== this.gen) { resolve(null); return; }
         this.tempo = t;
         this.tempoPending = null;
@@ -557,6 +594,7 @@ export class AudioEngine {
     const r = new Float32Array(this.srcR);
     const pending = new Promise<{ cols: number; bands: number; data: Uint8Array } | null>((resolve) => {
       this.spectrogramWaiters.push((d) => {
+        if (d.failed) { this.spectrogramPending = null; resolve(null); return; }
         if (gen !== this.gen) { resolve(null); return; }
         this.spectrogram = { cols: d.cols, bands: d.bands, data: new Uint8Array(d.data) };
         this.spectrogramPending = null;
@@ -579,11 +617,12 @@ export class AudioEngine {
     encode: EncodeOptions,
     onProgress: (p: ExportProgress) => void,
     onDone: (result: RenderResult) => void,
+    onError: (message: string) => void,
     extras: EncodeOptions[] = [],
   ): void {
-    if (!this.srcL || !this.srcR || !this.source) return;
+    if (!this.srcL || !this.srcR || !this.source) { onError('NO TRACK LOADED'); return; }
     const worker = this.ensureWorker();
-    this.renderHandlers = { onProgress, onDone };
+    this.renderHandlers = { onProgress, onDone, onError };
     this.rendering = true;
     const l = new Float32Array(this.srcL);
     const r = new Float32Array(this.srcR);
@@ -615,9 +654,22 @@ export class AudioEngine {
   }>();
   private batchReqSeq = 0;
 
+  private failBatchWorker(): void {
+    const w = this.batchWorker;
+    this.batchWorker = null;
+    w?.terminate();
+    this.primedSource = null;
+    for (const [reqId, entry] of this.batchPending) {
+      entry.resolve({ type: 'render-error', reqId, message: 'THE AUDIO WORKER STOPPED' });
+    }
+    this.batchPending.clear();
+  }
+
   private ensureBatchWorker(): Worker {
     if (this.batchWorker) return this.batchWorker;
     this.batchWorker = new Worker('./audio/jmaster-render-worker.js');
+    this.batchWorker.onerror = () => this.failBatchWorker();
+    this.batchWorker.onmessageerror = () => this.failBatchWorker();
     this.batchWorker.onmessage = (e) => {
       const d = e.data;
       const entry = d.reqId !== undefined ? this.batchPending.get(d.reqId) : undefined;
@@ -636,10 +688,7 @@ export class AudioEngine {
   async decodeOnly(data: ArrayBuffer): Promise<{ l: Float32Array; r: Float32Array; durationSec: number }> {
     const ctx = await this.ensureContext();
     const decoded = await ctx.decodeAudioData(data.slice(0));
-    const l = new Float32Array(decoded.getChannelData(0));
-    const r = new Float32Array(
-      decoded.numberOfChannels > 1 ? decoded.getChannelData(1) : decoded.getChannelData(0),
-    );
+    const { l, r } = toStereo(decoded);
     return { l, r, durationSec: decoded.duration };
   }
 
@@ -660,6 +709,7 @@ export class AudioEngine {
         [cl.buffer, cr.buffer],
       );
     });
+    if (res.type === 'render-error') throw new Error(res.message);
     return {
       lufs: res.lufs,
       balanceOffsetDb: res.balanceOffsetDb ?? 0,
@@ -682,6 +732,8 @@ export class AudioEngine {
   /** Notified whenever previewPending or processedPreview changes (UI mirror). */
   onPreviewUpdate: (() => void) | null = null;
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped per request and by every clear: only the latest reply lands. */
+  private previewSeq = 0;
   /** Which source the batch worker holds a primed preview copy of. */
   private primedSource: SourceInfo | null = null;
 
@@ -705,11 +757,14 @@ export class AudioEngine {
           this.primedSource = this.source;
         }
         const reqId = ++this.batchReqSeq;
+        const seq = ++this.previewSeq;
         const fullParams: ChainParams = { ...params, songLengthSec: this.source!.durationSec };
         const d: any = await new Promise((resolve) => {
           this.batchPending.set(reqId, { resolve });
           worker.postMessage({ type: 'preview', reqId, params: fullParams });
         });
+        // A newer request, a new track or OUT switched off: not ours to show.
+        if (seq !== this.previewSeq) return;
         if (d.type === 'previewed' && !d.unprimed) {
           this.processedPreview = {
             spb: d.spb,
@@ -728,9 +783,19 @@ export class AudioEngine {
 
   clearProcessedPreview(): void {
     if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewSeq++;
     this.processedPreview = null;
     this.previewPending = false;
     this.onPreviewUpdate?.();
+  }
+
+  /** OUT is off: the worker's copy of the track (hundreds of MB) goes. */
+  releasePreview(): void {
+    this.clearProcessedPreview();
+    if (this.primedSource) {
+      this.batchWorker?.postMessage({ type: 'unprime' });
+      this.primedSource = null;
+    }
   }
 
   // ── codec audition: loop the same excerpt as codec vs lossless ──────
@@ -824,37 +889,125 @@ export class AudioEngine {
   }
 }
 
-/** Reads the fmt chunk of a RIFF/WAVE header, if present. */
-function sniffWavBitDepth(data: ArrayBuffer): number | null {
-  try {
-    const v = new DataView(data);
-    if (v.getUint32(0, false) !== 0x52494646) return null; // 'RIFF'
-    if (v.getUint32(8, false) !== 0x57415645) return null; // 'WAVE'
-    let off = 12;
-    while (off + 8 <= v.byteLength) {
-      const id = v.getUint32(off, false);
-      const size = v.getUint32(off + 4, true);
-      if (id === 0x666d7420) return v.getUint16(off + 22, true); // 'fmt '
-      off += 8 + size + (size & 1);
+/**
+ * The decoded audio as a stereo pair (copies). Mono plays on both sides;
+ * surround folds down with the standard speaker downmix (Web Audio's,
+ * after ITU-R BS.775): centre and surrounds at −3 dB, LFE left out. A
+ * fold-down that sums past full scale is brought back to it, so the
+ * untouched REF can't clip. Unknown layouts keep their first two channels.
+ */
+export function toStereo(buf: AudioBuffer): { l: Float32Array; r: Float32Array; repaired: number } {
+  const { l, r } = foldDown(buf);
+  // A float file can carry NaN or ∞ samples; one would silence the whole
+  // chain from there on, so each becomes silence (and is counted).
+  let repaired = 0;
+  for (let i = 0; i < l.length; i++) {
+    if (!Number.isFinite(l[i])) { l[i] = 0; repaired++; }
+    if (!Number.isFinite(r[i])) { r[i] = 0; repaired++; }
+  }
+  // A fold-down that sums past full scale comes back to it.
+  if (buf.numberOfChannels > 2) {
+    let peak = 0;
+    for (let i = 0; i < l.length; i++) peak = Math.max(peak, Math.abs(l[i]), Math.abs(r[i]));
+    if (peak > 1) {
+      const k = 1 / peak;
+      for (let i = 0; i < l.length; i++) { l[i] *= k; r[i] *= k; }
     }
-  } catch { /* not a wav */ }
-  return null;
+  }
+  return { l, r, repaired };
 }
 
-function sniffWavSampleRate(data: ArrayBuffer): number | null {
+function foldDown(buf: AudioBuffer): { l: Float32Array; r: Float32Array } {
+  const ch = buf.numberOfChannels;
+  const at = (i: number) => buf.getChannelData(i);
+  if (ch === 1) return { l: new Float32Array(at(0)), r: new Float32Array(at(0)) };
+  // Channel order per layout: which feed the left and right (C feeds both).
+  const g = Math.SQRT1_2;
+  const layouts: Record<number, { left: [number, number][]; right: [number, number][] }> = {
+    3: { left: [[0, 1], [2, g]], right: [[1, 1], [2, g]] },                                    // L R C
+    4: { left: [[0, 0.5], [2, 0.5]], right: [[1, 0.5], [3, 0.5]] },                            // L R SL SR
+    5: { left: [[0, 1], [2, g], [3, g]], right: [[1, 1], [2, g], [4, g]] },                    // L R C SL SR
+    6: { left: [[0, 1], [2, g], [4, g]], right: [[1, 1], [2, g], [5, g]] },                    // L R C LFE SL SR
+    8: { left: [[0, 1], [2, g], [4, g], [6, g]], right: [[1, 1], [2, g], [5, g], [7, g]] },    // 7.1: + BL BR
+  };
+  const map = layouts[ch];
+  if (!map) return { l: new Float32Array(at(0)), r: new Float32Array(at(1)) };
+  const n = buf.length;
+  const mix = (feeds: [number, number][]) => {
+    const out = new Float32Array(n);
+    for (const [c, gain] of feeds) {
+      const x = at(c);
+      for (let i = 0; i < n; i++) out[i] += gain * x[i];
+    }
+    return out;
+  };
+  return { l: mix(map.left), r: mix(map.right) };
+}
+
+/**
+ * The file's own sample rate and bit depth, read from its header (the
+ * decoder hands back 48 kHz whatever came in). Lossy formats have no bit
+ * depth. Null where the header doesn't say.
+ */
+export function sniffFormat(data: ArrayBuffer): { sampleRate: number | null; bitDepth: number | null } {
+  const none = { sampleRate: null, bitDepth: null };
   try {
     const v = new DataView(data);
-    if (v.getUint32(0, false) !== 0x52494646) return null;
-    if (v.getUint32(8, false) !== 0x57415645) return null;
-    let off = 12;
-    while (off + 8 <= v.byteLength) {
-      const id = v.getUint32(off, false);
-      const size = v.getUint32(off + 4, true);
-      if (id === 0x666d7420) return v.getUint32(off + 12, true);
-      off += 8 + size + (size & 1);
+    const b = new Uint8Array(data);
+    const tag = (o: number) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+    if (b.length < 16) return none;
+    // WAV: the fmt chunk.
+    if (tag(0) === 'RIFF' && tag(8) === 'WAVE') {
+      let off = 12;
+      while (off + 8 <= b.length) {
+        const size = v.getUint32(off + 4, true);
+        if (tag(off) === 'fmt ') return { sampleRate: v.getUint32(off + 12, true), bitDepth: v.getUint16(off + 22, true) };
+        off += 8 + size + (size & 1);
+      }
+      return none;
     }
-  } catch { /* not a wav */ }
-  return null;
+    // Skip an ID3v2 tag (MP3, sometimes FLAC).
+    let o = 0;
+    if (tag(0).startsWith('ID3')) {
+      o = 10 + ((b[6] & 0x7f) << 21 | (b[7] & 0x7f) << 14 | (b[8] & 0x7f) << 7 | (b[9] & 0x7f)) + (b[5] & 0x10 ? 10 : 0);
+    }
+    // FLAC: STREAMINFO follows the magic.
+    if (tag(o) === 'fLaC') {
+      const si = o + 8;
+      return {
+        sampleRate: (b[si + 10] << 12) | (b[si + 11] << 4) | (b[si + 12] >> 4),
+        bitDepth: (((b[si + 12] & 1) << 4) | (b[si + 13] >> 4)) + 1,
+      };
+    }
+    // Ogg: the first packet is Vorbis's or Opus's identification header.
+    if (tag(0) === 'OggS') {
+      const p = 27 + b[26];
+      if (b[p] === 1 && tag(p + 1) === 'vorb') return { sampleRate: v.getUint32(p + 12, true), bitDepth: null };
+      if (tag(p) === 'Opus') return { sampleRate: 48000, bitDepth: null }; // Opus always decodes at 48 kHz
+      return none;
+    }
+    // MP4/M4A: the mp4a sample entry carries the rate (16.16 fixed point).
+    if (tag(4) === 'ftyp') {
+      const lim = Math.min(b.length - 32, 8 << 20);
+      for (let i = 8; i < lim; i++) {
+        if (b[i] === 0x6d && b[i + 1] === 0x70 && b[i + 2] === 0x34 && b[i + 3] === 0x61) { // 'mp4a'
+          return { sampleRate: v.getUint16(i + 28, false) || null, bitDepth: null };
+        }
+      }
+      return none;
+    }
+    // MP3: the first frame header after any tag.
+    for (let i = o; i < Math.min(b.length - 4, o + 65536); i++) {
+      if (b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) continue;
+      const ver = (b[i + 1] >> 3) & 3;       // 3 = MPEG-1, 2 = MPEG-2, 0 = MPEG-2.5
+      const layer = (b[i + 1] >> 1) & 3;
+      const idx = (b[i + 2] >> 2) & 3;
+      if (ver === 1 || layer === 0 || idx === 3) continue;
+      const base = [44100, 48000, 32000][idx];
+      return { sampleRate: ver === 3 ? base : ver === 2 ? base / 2 : base / 4, bitDepth: null };
+    }
+  } catch { /* unreadable header: say nothing */ }
+  return none;
 }
 
 export const engine = new AudioEngine();

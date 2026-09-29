@@ -1,22 +1,25 @@
 // The AUTO-MASTER decision sheet: what was measured, what was chosen, why.
 import { useStore } from '../state/store';
+import { useSheetFocus } from '../lib/use-sheet-focus';
 
 export function MasterItReport() {
   const report = useStore((s) => s.masterItReport);
   const close = useStore((s) => s.closeMasterItReport);
-  const undo = useStore((s) => s.undo);
+  const undoAll = useStore((s) => s.undoMasterIt);
+
+  const sheetRef = useSheetFocus<HTMLDivElement>(!!report);
 
   if (!report) return null;
 
   return (
     <div className="scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}>
-      <div className="dialog frame" role="dialog" aria-label="Auto-master report" style={{ width: 480 }}>
+      <div className="dialog frame" role="dialog" aria-modal="true" tabIndex={-1} ref={sheetRef} aria-label="Auto-master report" style={{ width: 480 }}>
         <span className="xh tl">+</span><span className="xh tr">+</span>
         <span className="xh bl">+</span><span className="xh br">+</span>
 
         <div>
           <div className="display dtitle">Mastered<span style={{ color: 'var(--signal-500)' }}>.</span></div>
-          <div className="spec" style={{ marginTop: 4 }}>
+          <div className="spec dsub" title={`${report.presetName} · EVERY DECISION SHOWN · ADJUST ANYTHING`}>
             {report.presetName} · EVERY DECISION SHOWN · ADJUST ANYTHING
           </div>
         </div>
@@ -31,7 +34,7 @@ export function MasterItReport() {
         </div>
 
         <div className="drow" style={{ justifyContent: 'space-between' }}>
-          <button className="btn btn-secondary" onClick={() => { undo(); close(); }}>
+          <button className="btn btn-secondary" onClick={undoAll}>
             UNDO ALL OF IT
           </button>
           <button className="btn btn-accent" onClick={close}>SOUNDS GOOD →</button>

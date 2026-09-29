@@ -15,7 +15,7 @@ import { Limiter } from './limiter';
 import { DeHarsh } from './deharsh';
 import { StemLanes } from './stemlanes';
 import { fadeGainAt } from './fades';
-import { ChainParams, defaultParams, dbToLin, MATCH_EQ_CENTERS } from './params';
+import { ChainParams, defaultParams, dbToLin, defaultAdvEq, MATCH_EQ_CENTERS } from './params';
 
 const SLEW_MS = 15;
 
@@ -53,13 +53,17 @@ export class MasterChain {
   private shapeBL = new Biquad(); private shapeBR = new Biquad();
   private airL = new Biquad(); private airR = new Biquad();
 
-  // Reference-match correction EQ (static, keyed by its gain vector).
-  private matchL: Biquad[] = [];
-  private matchR: Biquad[] = [];
+  // Reference-match correction EQ and the advanced parametric EQ: one
+  // filter per band for the chain's life. A change retunes coefficients in
+  // place and keeps the filter state, so dragging a band never thumps the
+  // others; a band at 0 dB is skipped, and starts clean when it returns.
+  private matchL = MATCH_EQ_CENTERS.map(() => new Biquad());
+  private matchR = MATCH_EQ_CENTERS.map(() => new Biquad());
+  private matchOn = MATCH_EQ_CENTERS.map(() => false);
   private matchKey = '';
-  // Advanced parametric EQ (static, keyed by its band spec).
-  private advL: Biquad[] = [];
-  private advR: Biquad[] = [];
+  private advL = defaultAdvEq().map(() => new Biquad());
+  private advR = defaultAdvEq().map(() => new Biquad());
+  private advOn = defaultAdvEq().map(() => false);
   private advKey = '';
 
   private sat: Saturator;
@@ -85,7 +89,15 @@ export class MasterChain {
 
   readonly latency: number;
 
-  constructor(fs: number, blockSize = 128) {
+  /** False when the chain runs without its output limiter (offline). */
+  private readonly useLimiter: boolean;
+
+  /**
+   * `limiter: false` leaves the output limiter out: offline renders run
+   * the chain with a transparent ceiling and limit afterwards, so there it
+   * would only cost time (and add latency).
+   */
+  constructor(fs: number, blockSize = 128, opts: { limiter?: boolean } = {}) {
     this.fs = fs;
     const slewCoef = 1 - Math.exp(-blockSize / (fs * (SLEW_MS / 1000)));
     this.sat = new Saturator(fs);
@@ -95,7 +107,8 @@ export class MasterChain {
     this.deharsh = new DeHarsh(fs);
     this.stems = new StemLanes(fs);
     this.limiter = new Limiter(fs);
-    this.latency = this.limiter.latency;
+    this.useLimiter = opts.limiter ?? true;
+    this.latency = this.useLimiter ? this.limiter.latency : 0;
 
     this.hpfL.setHighpass(fs, 18, 0.707);
     this.hpfR.setHighpass(fs, 18, 0.707);
@@ -163,45 +176,44 @@ export class MasterChain {
     return { compGrDb: this.comp.grDb, limiterGrDb: this.limiter.grDb, deharshGrDb: this.deharsh.grDb };
   }
 
-  /** Rebuilds the match/advanced EQ banks only when their specs change. */
+  /** Retunes the match/advanced EQ banks when their specs change. */
   private rebuildStaticEq(p: ChainParams): void {
     const fs = this.fs;
     const matchKey = (p.matchEqGains ?? []).join(',');
     if (matchKey !== this.matchKey) {
       this.matchKey = matchKey;
-      this.matchL = [];
-      this.matchR = [];
       const gains = p.matchEqGains ?? [];
-      for (let i = 0; i < gains.length && i < MATCH_EQ_CENTERS.length; i++) {
-        if (Math.abs(gains[i]) < 0.05) continue;
-        const bl = new Biquad();
+      for (let i = 0; i < MATCH_EQ_CENTERS.length; i++) {
+        const g = gains[i] ?? 0;
+        const on = Math.abs(g) >= 0.05;
+        const bl = this.matchL[i], br = this.matchR[i];
+        if (on && !this.matchOn[i]) { bl.reset(); br.reset(); }
+        this.matchOn[i] = on;
+        if (!on) continue;
         const f = MATCH_EQ_CENTERS[i];
-        if (i === 0) bl.setLowShelf(fs, f * 1.4, gains[i], 0.8);
-        else if (i === MATCH_EQ_CENTERS.length - 1) bl.setHighShelf(fs, f * 0.8, gains[i], 0.8);
-        else bl.setPeaking(fs, f, gains[i], 1.1);
-        const br = new Biquad();
+        if (i === 0) bl.setLowShelf(fs, f * 1.4, g, 0.8);
+        else if (i === MATCH_EQ_CENTERS.length - 1) bl.setHighShelf(fs, f * 0.8, g, 0.8);
+        else bl.setPeaking(fs, f, g, 1.1);
         br.copyCoefficientsFrom(bl);
-        this.matchL.push(bl);
-        this.matchR.push(br);
       }
     }
-    const advKey = (p.advEq ?? [])
+    const bands = p.advEq ?? [];
+    const advKey = bands
       .map((b) => `${b.on ? 1 : 0}:${b.type}:${b.freq.toFixed(0)}:${b.gainDb.toFixed(2)}:${b.q.toFixed(2)}`)
       .join('|');
     if (advKey !== this.advKey) {
       this.advKey = advKey;
-      this.advL = [];
-      this.advR = [];
-      for (const band of p.advEq ?? []) {
-        if (!band.on || Math.abs(band.gainDb) < 0.05) continue;
-        const bl = new Biquad();
+      for (let i = 0; i < this.advL.length; i++) {
+        const band = bands[i];
+        const on = !!band && band.on && Math.abs(band.gainDb) >= 0.05;
+        const bl = this.advL[i], br = this.advR[i];
+        if (on && !this.advOn[i]) { bl.reset(); br.reset(); }
+        this.advOn[i] = on;
+        if (!on) continue;
         if (band.type === 'lowshelf') bl.setLowShelf(fs, band.freq, band.gainDb, 0.9);
         else if (band.type === 'highshelf') bl.setHighShelf(fs, band.freq, band.gainDb, 0.9);
         else bl.setPeaking(fs, band.freq, band.gainDb, band.q);
-        const br = new Biquad();
         br.copyCoefficientsFrom(bl);
-        this.advL.push(bl);
-        this.advR.push(br);
       }
     }
   }
@@ -237,8 +249,13 @@ export class MasterChain {
   /**
    * Processes a block in place. `positionSamples` is the absolute song
    * position of the first sample (pre-limiter-latency), used for fades.
+   * A block that wraps a loop passes its runs instead: `spans` holds
+   * [block offset, source position, length] per run, `spanCount` of them.
    */
-  processBlock(L: Float32Array, R: Float32Array, start: number, len: number, positionSamples: number): void {
+  processBlock(
+    L: Float32Array, R: Float32Array, start: number, len: number, positionSamples: number,
+    spans?: ArrayLike<number>, spanCount = 0,
+  ): void {
     const p = this.p;
 
     let eqDirty = false;
@@ -266,8 +283,8 @@ export class MasterChain {
       // Reference mode: loudness-matched raw signal through the same limiter.
       const g = staging * this.refGain.current;
       for (let i = start; i < start + len; i++) { L[i] *= g; R[i] *= g; }
-      this.applyFades(L, R, start, len, positionSamples);
-      this.limiter.processBlock(L, R, start, len);
+      this.applyFadeRuns(L, R, start, len, positionSamples, spans, spanCount);
+      if (this.useLimiter) this.limiter.processBlock(L, R, start, len);
       return;
     }
 
@@ -287,10 +304,12 @@ export class MasterChain {
     this.airR.processBlock(R, start, len);
 
     for (let i = 0; i < this.matchL.length; i++) {
+      if (!this.matchOn[i]) continue;
       this.matchL[i].processBlock(L, start, len);
       this.matchR[i].processBlock(R, start, len);
     }
     for (let i = 0; i < this.advL.length; i++) {
+      if (!this.advOn[i]) continue;
       this.advL[i].processBlock(L, start, len);
       this.advR[i].processBlock(R, start, len);
     }
@@ -311,11 +330,22 @@ export class MasterChain {
       for (let i = start; i < start + len; i++) { L[i] *= gL; R[i] *= gR; }
     }
 
-    this.applyFades(L, R, start, len, positionSamples);
+    this.applyFadeRuns(L, R, start, len, positionSamples, spans, spanCount);
 
     for (let i = start; i < start + len; i++) { L[i] *= output; R[i] *= output; }
 
-    this.limiter.processBlock(L, R, start, len);
+    if (this.useLimiter) this.limiter.processBlock(L, R, start, len);
+  }
+
+  /** Fades by source position, run by run when a loop wraps in the block. */
+  private applyFadeRuns(
+    L: Float32Array, R: Float32Array, start: number, len: number, positionSamples: number,
+    spans: ArrayLike<number> | undefined, spanCount: number,
+  ): void {
+    if (!spans || spanCount <= 1) { this.applyFades(L, R, start, len, positionSamples); return; }
+    for (let k = 0; k < spanCount; k++) {
+      this.applyFades(L, R, start + spans[3 * k], spans[3 * k + 2], spans[3 * k + 1]);
+    }
   }
 
   private applyFades(L: Float32Array, R: Float32Array, start: number, len: number, positionSamples: number): void {
