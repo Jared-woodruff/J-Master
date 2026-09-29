@@ -21,6 +21,130 @@
 - Fix: with LOOP on, the CLICK could drop the loop's first beat at every
   wrap (or accent the wrong one). Clicks now follow the looped audio.
 
+### Sound (measured on the real DSP)
+- **CHARACTER no longer dulls the top end.** The 4× oversampler's
+  decimator had one branch a sample pair out of line, which rolled off
+  every preset with CHARACTER above zero (28 of 30): −2.5 dB at 10 kHz,
+  −6.2 dB at 15 kHz. It is now flat to 15 kHz (−0.01 dB). Presets sound
+  brighter on top than before; that brightness was always meant to be
+  there.
+- **SMOOTH renders exactly as it previews.** It decided its cut once per
+  processing block, and the export's blocks are 32 times longer than the
+  preview's, so the two differed audibly (−31 dB residual at SMOOTH 1).
+  It now decides on a fixed grid, and preview and export are
+  bit-identical at any setting. It also lets go in silence instead of
+  sitting at full cut after a quiet intro.
+- **Loudness reads true.** The K-weighting now matches BS.1770-4
+  coefficient for coefficient (the EBU 1 kHz reference reads −22.99 LUFS,
+  was −23.25), so masters no longer land 0.1–0.4 LU hot on a compliant
+  meter.
+- **The true-peak ceiling holds.** The limiter's gain is now fully down
+  when a peak arrives, and peaks are found at 8× oversampling: real
+  material pushed 12 dB into a −1.0 dBTP ceiling measures −0.97 to
+  −0.99 dBTP at 16× (was about −0.7).
+- **Loud targets land.** The loudness solve learns how the limiter pushes
+  back instead of stepping blindly: −7 to −14 LUFS targets all land within
+  0.05 LU (a −8 target could fall 0.7 LU short). Checked with ffmpeg's EBU
+  R128 meter: −11.5 LUFS and −1.0 dBTP on ROCK's −11.5 / −1.0.
+- Exports line up with the source sample for sample and keep their last
+  5 ms (two limiter delays were never compensated).
+- The OUT preview is the export: both run the same render, so what OUT
+  shows is exactly what RENDER writes.
+- Dragging an advanced EQ band no longer thumps the other bands.
+- Fades no longer click when a loop wraps inside the fade.
+- Renders are faster despite the finer peak detection: a 5-minute track
+  with ROCK went from 11.5 s to 9.3 s, and from 3.9 s to 1.5 s flat.
+
+### Safety
+- **Fix: REF could leak into exports.** A tap of R latches the untouched
+  source, and a render made while it was latched came out unprocessed
+  (only normalized). REF and LIM Δ are listening aids and never render.
+- **Fix: a failed save froze EXPORT.** A render error or a file that
+  couldn't be written (open in a player, a blocked folder, a full disk)
+  left the sheet stuck at SAVING 98% until restart. It now says why and
+  recovers.
+- **Nothing is overwritten.** Batch masters, ALSO SAVE copies and every
+  other file saved into a folder get " (2)", " (3)"… instead of replacing
+  what's there (an ALSO SAVE MP3 could replace its own source). A CD image
+  is written beside its final name and only replaces the previous image
+  once complete.
+- **A shared project can't reach out over the network.** Paths in a
+  `.jmaster` file that point at another machine are never opened by
+  themselves (Windows would sign in there with your credentials); network
+  paths you choose yourself work as before. The app window can no longer
+  be navigated away, and it runs sandboxed.
+- Projects and saved settings are checked value by value, so a newer,
+  older or hand-edited file can't put NaN or an unknown setting into the
+  chain.
+
+### Workflow
+- Esc closes the open sheet (never mid-render). Console keys rest while a
+  sheet is open, Ctrl+A or Ctrl+L no longer act as A or L, and Home on a
+  focused knob resets the knob, not the song.
+- Batch and album tracks no longer take the loaded track's balance
+  correction and fades; each starts centred and takes its own fixes.
+- MASTER ALL on a finished queue masters it again with the current
+  console (it used to report success and render nothing).
+- AUTO is one undo step: UNDO ALL OF IT now also undoes the preset it
+  chose and the genre tag.
+- A/B slots keep the advanced EQ, match EQ, stem trims and bass mono, and
+  switching slots no longer lands in undo history.
+- Undo history belongs to a track and starts fresh when another loads.
+- A loaded MATCH reference re-fits its curve to each new track.
+- The DIAG width fix only ever narrows.
+- The codec audition stops when EXPORT closes, when the format changes,
+  or when playback starts.
+- A typed export name keeps itself when the format changes and always
+  gets the right extension; ALSO SAVE copies are named after the file you
+  actually saved.
+- A project opened without its audio keeps pointing at it (a save doesn't
+  lose the track) and restores its balance when you load it.
+
+### Analysis
+- **Silence is silence.** Leading or trailing silence no longer skews the
+  tempo or wipes out section changes (a 40 s silent tail used to hide all
+  of them): tempo is measured on the music alone, and long silences show
+  as SILENCE sections.
+- Silence, blips and drones report no tempo ("— BPM") instead of a made-up
+  200.9 BPM, and GRID and CLICK stand down.
+- A riser or build-up no longer pulls a section boundary a bar early.
+- Surround files fold down to stereo properly (5.1 was mastered from its
+  front left and right only).
+- MP3, FLAC, Ogg and M4A show their real sample rate (was always 48 kHz).
+- NaN or infinite samples in a float WAV are silenced (and reported)
+  instead of silencing the whole preview.
+- A source too quiet or short to measure is rendered at unity gain rather
+  than blown up to the target.
+- Silent audio reads "< −70 LUFS" and "−∞ dBTP" instead of −70.0 / −200.0.
+
+### Formats
+- Opus files keep their exact length (they lost their last 6.5 ms) and
+  their timing stamps follow RFC 7845.
+- CD: the CUE sheet is Latin-1 with an ASCII image name that every burner
+  can find; quotes in titles no longer break it; 12-digit UPC-A barcodes
+  are accepted and every code's check digit is verified; invalid ISRCs
+  are left out and reported; CD limits (99 tracks, 4 s each, 79:57) are
+  checked before the render starts.
+
+### Look and feel
+- Small windows: the lower deck keeps a usable height and the whole
+  workspace scrolls, the start screen no longer pushes the status bar off
+  short windows, and the track strip can't be covered by the waveform.
+- OUTPUT puts its units in the captions, so numbers never wrap.
+- PAPER: the waveform and meter wells keep their dark-theme lines and
+  text, and toasts are dark plates that stand off the page.
+- Dialog subtitles and batch names end in an ellipsis (with the full text
+  as a tooltip) instead of crossing the frame; failed batch rows say why.
+- Recent files are left-aligned rows with their folder; long paths keep
+  their end in view.
+- The waveform and spectrum repaint after a resize; MATCH shows its curve
+  when reopened; the advanced EQ idles when nothing moves.
+- Shift+wheel pans both ways; trackpads pan and zoom smoothly; a wheel
+  over a knob turns only the knob.
+- Keyboard and screen readers: sheets take focus and give it back, the
+  console behind them goes inert, toggles report their state, icon buttons
+  have names, and tooltips keep descriptions readable.
+
 ## 2.5.0
 - **Fix: dropping a track onto the open screen made the UI flash until
   restart.** One drop was handled twice, loading the track in parallel and

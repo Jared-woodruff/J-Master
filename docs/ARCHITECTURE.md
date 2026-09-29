@@ -18,11 +18,19 @@ places:
   meter frames (~46 Hz) to the UI. The monitor matrix exists only in this
   file; the chain never reads it, so it can never reach a render.
 - **Offline:** `src/audio/render/render-worker.ts`, a worker that runs the
-  identical chain for exports, previews, calibration and analysis.
+  identical chain for exports, previews, calibration and analysis. Exports
+  and the OUT preview share one function, `renderMaster()` in
+  `src/audio/render/master.ts`, so the preview is the export.
 
 Both are bundled by `scripts/build-audio.mjs` (esbuild) into
 `public/audio/`, from the same sources. Any DSP change automatically applies
 to both paths.
+
+Block size must never change the sound: the preview runs 128-sample blocks
+and the export 4096. Every stage is sample-by-sample, or (SMOOTH) decides on
+a fixed 32-sample grid counted from the stream start, so the two are
+bit-identical. Keep it that way when adding a stage: anything smoothed "per
+block" breaks the contract.
 
 ### Signal flow
 
@@ -40,21 +48,41 @@ staging gain (source → −18 LUFS nominal)
 ```
 
 Continuous parameters are slewed per 128-sample block (~15 ms) for a
-zipperless console. The match/advanced EQ banks are static biquads rebuilt
-only when their spec strings change.
+zipperless console. The match/advanced EQ banks keep one biquad per band
+for the chain's life and retune it in place when its spec changes, so a
+drag never resets the other bands' filter state.
+
+Offline, the chain runs without its output limiter (`{ limiter: false }`):
+there it would be transparent, and the loudness solve limits afterwards.
+Each offline stage pads its input by its latency and reads from that
+offset, so the master lines up with the source sample for sample.
 
 ### Loudness
 
 `src/audio/dsp/loudness.ts` implements ITU-R BS.1770-4: K-weighting
-(the exact shelf + highpass), 400 ms gating blocks at 75 % overlap, absolute
-−70 gate and relative −10 LU gate for integrated loudness, EBU R128 LRA
-(gated short-term p95 − p10), and 4× polyphase true-peak estimation.
+derived for any rate as libebur128 does (at 48 kHz it equals the
+standard's coefficient table), 400 ms gating blocks at 75 % overlap,
+absolute −70 gate and relative −10 LU gate for integrated loudness, EBU
+R128 LRA (gated short-term p95 − p10), and true peak. The live meter in the
+worklet never allocates: the last 3 s of hops sit in a ring and the
+integrated value gates a 0.1 LU histogram.
+
+True peak (`src/audio/dsp/limiter.ts`) is found at 8× with 24-tap
+Kaiser-windowed sinc phases: at most 0.07 dB under-read to 16 kHz. The
+limiter holds the required gain over its lookahead (sliding minimum),
+releases it exponentially, then averages it over the lookahead, so every
+attack is a ramp that is fully down when the peak leaves the delay.
+Offline passes share a `TruePeakEnvelope`, which computes the exact
+interpolation only where a cheap bound says the ceiling is in reach.
 
 The export renderer solves loudness exactly: run the chain core once, then
-iterate *gain → limit → measure* (up to 4 passes, exit at 0.15 LU error).
-The preview can't do a full solve per knob-turn, so the engine renders the
-loudest 6 s excerpt through the chain (debounced) and derives a calibration
-delta; preview loudness tracks the eventual export within ~0.3 LU.
+*gain → limit → measure* with secant steps (the limiter makes a dB of gain
+worth less than a LU once it works), up to 8 passes, exit within 0.05 LU,
+keeping the closest. A source too quiet or short to measure (−70 LUFS)
+renders at unity gain. The preview can't do a full solve per knob-turn, so
+the engine renders the loudest 6 s excerpt through the chain (debounced)
+and derives a calibration delta; preview loudness tracks the eventual
+export within ~0.3 LU.
 
 ### Phase lessons (learned the measured way)
 
@@ -108,8 +136,14 @@ All in the render worker (`render-worker.ts`):
   near the tempo that 20 s windows vote for (a drifting tempo smears the
   whole-track peak and can let a dotted rhythm win); beat phase from squared
   low-band onsets (kick/bass own the downbeat); section detection via
-  checkerboard novelty on 8-band features, snapped to bars; bar phase chosen
-  so bars start on section boundaries.
+  checkerboard novelty on 8-band features, each change moved to the
+  sharpest half-second turn near it (a riser draws the 2 s novelty early),
+  snapped to bars; bar phase chosen so bars start on section boundaries.
+  Everything is measured on the music alone: columns more than 60 dB below
+  the loudest are silence, silence at the ends is cut away before the tempo
+  work and becomes its own SILENCE section, and windows that touch silence
+  don't set the novelty threshold. No periodicity at all means bpm 0 (the
+  sections still stand).
 - **tempo over time:** a tempo curve (12 s windows every second: beat lag
   first, then refined on the four-beat lag), beats tracked through it by
   dynamic programming (after Ellis 2007, stiff enough to hold the beat
@@ -135,12 +169,16 @@ multiplexing, so long album renders never block preview calibration.
 ## State
 
 `src/state/store.ts` (zustand + persist). One store owns the console,
-transport mirror, dialogs, batch queue, history and project I/O:
+transport mirror, dialogs, batch queue, history and project I/O. Anything
+read from disk (a project, the saved settings) passes through
+`cleanConsole()` and friends first: every value typed, clamped and known.
 
 - **ConsoleState** is the serialization unit: macros, targets, balance,
   bass-mono, fades, match EQ, advanced EQ, stem trims. Undo/redo snapshots
-  it (gesture-collapsed), A/B slots swap it, `.jmaster` project files embed
-  it, and batch items override parts of it.
+  it (gesture-collapsed, cleared when a track loads), A/B slots swap its
+  sound (outside undo), `.jmaster` project files embed it, and batch items
+  derive theirs in `trackParams()`: the console's sound, their own balance
+  fix and no fades.
 - Preferences (theme, views, export settings, metadata, A/B slots, export
   history, recent files) persist via localStorage. Front-cover art lives in
   the session and in `.jmaster` files (base64), never in localStorage.
@@ -149,9 +187,17 @@ transport mirror, dialogs, batch queue, history and project I/O:
 
 `electron/main.ts`: frameless window, native dialogs, file association for
 `.jmaster` (single-instance, argv handoff), streamed file writes for CD
-images (`writeFileNew` / `appendFile` / `patchFile`), reveal-in-folder.
-The renderer runs with `contextIsolation` and no `nodeIntegration`; the
-preload exposes a narrow typed bridge.
+images (`writeFileNew` / `appendFile` / `patchFile`, written as `.partial`
+and committed by rename), reveal-in-folder. The renderer runs sandboxed with
+`contextIsolation`, no `nodeIntegration` and no navigation; the preload
+exposes a narrow typed bridge.
+
+Every path the renderer hands over is checked. Local paths are fine;
+network (UNC) and device paths only once the user chose them this session
+(a dialog, a drop, the launch arguments), because Windows signs in to a
+network path with the user's credentials and a shared project must not
+trigger that. Saving into a folder never replaces an existing file: names
+are numbered " (2)", " (3)"…
 
 ## Verification harness
 

@@ -38,7 +38,7 @@ Built by **[JMW Software](https://www.jmwsoftware.com.au)** for
 
 <table>
   <tr>
-    <td width="33%" valign="top"><b>Exact loudness</b><br/><sub>Measure, gain, true-peak limit, verify. Every export lands within 0.15 LU of its target with the ceiling held.</sub></td>
+    <td width="33%" valign="top"><b>Exact loudness</b><br/><sub>Measure, gain, true-peak limit, verify. Every export lands within 0.05 LU of its target with the ceiling held.</sub></td>
     <td width="33%" valign="top"><b>Every decision shown</b><br/><sub>AUTO masters in one click and prints its reasoning. One more click undoes all of it.</sub></td>
     <td width="33%" valign="top"><b>Honest monitoring</b><br/><sub>Split compare, section loop, loudness-matched bypass, mono and side checks, platform playback levels, a vectorscope.</sub></td>
   </tr>
@@ -226,7 +226,7 @@ Every load runs a full analysis pass:
 **One render, everything you deliver.**
 
 The export pipeline solves loudness *exactly*: measure, gain, true-peak
-limit, verify, iterating until the master lands within 0.15 LU of its target
+limit, verify, iterating until the master lands within 0.05 LU of its target
 with the ceiling held in dBTP.
 
 - **ALSO SAVE** encodes extra formats from the same render and saves them
@@ -304,15 +304,17 @@ scriptable hook (`window.__jmaster`) that drives the real app:
 
 | Claim | Measured |
 |---|---|
-| Export hits its loudness target | −11.58 LUFS on a −11.5 target |
-| True-peak ceiling held | −0.98 dBTP against a −1.0 ceiling |
+| Export hits its loudness target | −11.49 LUFS on a −11.5 target; ffmpeg's EBU R128 meter reads −11.5 |
+| True-peak ceiling held | −1.0 dBTP by ffmpeg on a −1.0 ceiling; −0.97 to −0.99 at 16× oversampling with the limiter pushed 12 dB |
+| Loudness meter is BS.1770-4 | K-weighting equal to the standard's coefficients; the EBU Tech 3341 1 kHz reference reads −22.99 LUFS |
+| Preview equals export | the chain at 128-sample (preview) and 4096-sample (export) blocks: bit-identical at every setting |
 | FLAC is lossless | 0 errors across full decode round trips (LPC and M/S frames included) |
 | ALSO SAVE is one render | a WAV and a FLAC from one export differ in 0 samples; all three files −11.12 LUFS on a −11.0 target |
 | Opus loudness survives the codec | −11.63 LUFS decoded against a −11.5 target |
 | BPM detection | 100.05 on a 100.00 BPM test track; 110.01 on the 110.00 BPM demo track; the grid lands within 11 ms of every true beat |
 | Tempo drift detection | a +4% ramp, a +2.5% step and a ±1.2% wobble each flagged where it happens; steady tracks measure within ±0.03 BPM and are never flagged |
 | CLICK follows a drifting track | every click within 1 sample of its tracked beat, accented on the bar |
-| Section detection | demo track boundaries at 17.5, 34.9, 52.4 and 69.8 s; its bar lines fall at 17.45, 34.91, 52.36 and 69.82 s |
+| Section detection | demo track boundaries at 17.5, 34.9, 52.4 and 69.8 s; its bar lines fall at 17.45, 34.91, 52.36 and 69.82 s; the same with 10 s of silence before or 40 s after, and with 2–8 s risers before each change |
 | CD image frame alignment | track 2 INDEX at exactly 00:34:00 for a 32 s track plus a 2 s gap |
 | Balance correction | +2.03 dB measured on a +2.02 dB expected shift |
 | MON matrix is honest | correlation 1.00 in MONO; side solo −4.7 dB on a centred source |
@@ -355,6 +357,7 @@ download fallback), which is how the automated verification drives it.
 | Reference (untouched source) | <kbd>R</kbd>; hold for a momentary compare |
 | A/B snapshot slot | <kbd>A</kbd> |
 | Export | <kbd>E</kbd> |
+| Close the open sheet | <kbd>Esc</kbd> |
 | Save / open a project | <kbd>Ctrl</kbd> + <kbd>S</kbd> / <kbd>Ctrl</kbd> + <kbd>O</kbd> |
 | Undo / redo | <kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd> |
 | Fine knob drag | <kbd>Shift</kbd> + drag |
