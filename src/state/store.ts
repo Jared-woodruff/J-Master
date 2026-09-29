@@ -65,7 +65,17 @@ interface HistoryEntry {
   /** Which control produced the entry — continuous gestures collapse. */
   field: string;
   at: number;
+  /** Kept as the entry moves between undo and redo: one step, one id. */
+  id: number;
+  /**
+   * The genre tag to put back with `snap`, for steps that set it (a preset,
+   * AUTO). The tag isn't console state, so without this an undo would leave
+   * the preset's genre in the export metadata.
+   */
+  genre?: string;
 }
+
+let historySeq = 0;
 
 const undoStack: HistoryEntry[] = [];
 const redoStack: HistoryEntry[] = [];
@@ -609,7 +619,8 @@ interface JMasterState {
     deltaGains: number[]; suggestedWidth: number;
   } | null;
   matchLoading: boolean;
-  masterItReport: { presetName: string; reasons: string[]; genreBefore: string } | null;
+  /** `historyId`: AUTO's own undo step, so UNDO ALL can tell it's still the latest. */
+  masterItReport: { presetName: string; reasons: string[]; historyId: number } | null;
   masterItBusy: boolean;
   audition: { active: boolean; mode: 'codec' | 'master'; busy: boolean };
   metronome: boolean;
@@ -960,7 +971,7 @@ async function refitMatch(
 let historySet: ((p: Partial<JMasterState>) => void) | null = null;
 /** Set while one action (AUTO) makes several changes under a single entry. */
 let historyHeld = false;
-function record(get: () => JMasterState, field: string): void {
+function record(get: () => JMasterState, field: string, opts: { genre?: boolean } = {}): void {
   if (historyHeld) return;
   const now = Date.now();
   const top = undoStack[undoStack.length - 1];
@@ -968,10 +979,32 @@ function record(get: () => JMasterState, field: string): void {
     top.at = now;
     return;
   }
-  undoStack.push({ snap: captureConsole(get()), field, at: now });
+  undoStack.push({
+    snap: captureConsole(get()), field, at: now, id: ++historySeq,
+    ...(opts.genre ? { genre: get().meta.genre } : {}),
+  });
   if (undoStack.length > HISTORY_MAX) undoStack.shift();
   redoStack.length = 0;
   historySet?.({ undoDepth: undoStack.length, redoDepth: 0 });
+}
+
+/** What the other stack keeps when `entry` is applied: the state it replaces. */
+function swapEntry(entry: HistoryEntry, get: () => JMasterState): HistoryEntry {
+  return {
+    snap: captureConsole(get()), field: entry.field, at: Date.now(), id: entry.id,
+    ...(entry.genre !== undefined ? { genre: get().meta.genre } : {}),
+  };
+}
+
+function applyEntry(
+  entry: HistoryEntry, set: (p: Partial<JMasterState> | ((s: JMasterState) => Partial<JMasterState>)) => void,
+  get: () => JMasterState,
+): void {
+  applyConsole(entry.snap, set, get);
+  if (entry.genre !== undefined) {
+    const genre = entry.genre;
+    set((s) => ({ meta: { ...s.meta, genre } }));
+  }
 }
 
 // ── values from files ─────────────────────────────────────────────────
@@ -1465,17 +1498,19 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         get().pushToast(`A CD HOLDS ${CD_MAX_TRACKS} TRACKS · THIS ALBUM HAS ${items.length}`, 'fault');
         return;
       }
-      if (items.every((it) => it.durationSec !== undefined)) {
-        const short = items.filter((it) => it.durationSec! < CD_MIN_TRACK_SEC).length;
-        if (short > 0) {
-          get().pushToast(`CD TRACKS RUN ${CD_MIN_TRACK_SEC} S AT LEAST · ${short} TOO SHORT`, 'fault');
-          return;
-        }
-        const total = items.reduce((a, it) => a + it.durationSec!, 0) + s.albumGapSec * (items.length - 1);
-        if (total > CD_MAX_SEC) {
-          get().pushToast(`${mmss(total)} WON’T FIT ON A CD · 79:57 AT MOST`, 'fault');
-          return;
-        }
+      // Durations the scan has measured are checked now; any it hasn't (still
+      // scanning, or unreadable) are checked as each track decodes, before
+      // its render, so an image that breaks the limits is never committed.
+      const known = items.filter((it) => it.durationSec !== undefined);
+      const short = known.filter((it) => it.durationSec! < CD_MIN_TRACK_SEC).length;
+      if (short > 0) {
+        get().pushToast(`CD TRACKS RUN ${CD_MIN_TRACK_SEC} S AT LEAST · ${short} TOO SHORT`, 'fault');
+        return;
+      }
+      const knownTotal = known.reduce((a, it) => a + it.durationSec!, 0) + s.albumGapSec * (items.length - 1);
+      if (knownTotal > CD_MAX_SEC) {
+        get().pushToast(`${mmss(knownTotal)} WON’T FIT ON A CD · 79:57 AT MOST`, 'fault');
+        return;
       }
       const upc = s.albumUpc ? ean13(s.albumUpc) : null;
       const dropped: string[] = [];
@@ -1515,6 +1550,12 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
             ? await bridge.readFileByPath(src.path)
             : await src.file!.arrayBuffer();
           const { l, r, durationSec } = await engine.decodeOnly(bytes);
+          if (durationSec < CD_MIN_TRACK_SEC) {
+            throw new Error(`TRACK ${idx + 1} IS ${durationSec.toFixed(1)} S · CD TRACKS NEED ${CD_MIN_TRACK_SEC}`);
+          }
+          if (totalSamples / 44100 + durationSec > CD_MAX_SEC) {
+            throw new Error(`TRACK ${idx + 1} RUNS PAST 79:57 · WON’T FIT ON A CD`);
+          }
           const lufs = item.lufs ?? (await engine.measureLufs(l, r));
           const itemParams = trackParams(get(), params, item);
           const rendered = await engine.renderBuffers(
@@ -1662,9 +1703,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           reasons.push('NO PROFILE · POP (SAFE)');
         }
         const preset = PRESETS.find((p) => p.id === presetPick)!;
-        const genreBefore = get().meta.genre;
         // One history entry for the whole of AUTO, so UNDO ALL is one undo.
-        record(get, 'masterit');
+        record(get, 'masterit', { genre: true });
+        const historyId = undoStack[undoStack.length - 1]?.id ?? -1;
         historyHeld = true;
         const issues = get().diagIssues;
         try {
@@ -1681,7 +1722,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           ? `FIXES ${issues.map((i) => i.fixLabel).join(' · ')}`
           : 'SOURCE CHECKS CLEAN · NO FIXES NEEDED');
         if (tempo?.drift) reasons.push('TEMPO DRIFT FLAGGED · NO AUDIO FIX · SEE DIAG');
-        set({ masterItReport: { presetName: preset.name, reasons, genreBefore }, masterItBusy: false });
+        set({ masterItReport: { presetName: preset.name, reasons, historyId }, masterItBusy: false });
       } catch {
         set({ masterItBusy: false });
         get().pushToast('AUTO-MASTER FAILED', 'fault');
@@ -1695,30 +1736,32 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     undoMasterIt() {
       const report = get().masterItReport;
       if (!report) return;
-      get().undo();
-      set((s) => ({ masterItReport: null, meta: { ...s.meta, genre: report.genreBefore } }));
+      // Only AUTO's own step: after a Ctrl+Z it's already undone (genre and
+      // all), and a second undo would take back something unrelated.
+      if (undoStack[undoStack.length - 1]?.id === report.historyId) get().undo();
+      set({ masterItReport: null });
     },
 
     undo() {
       const entry = undoStack.pop();
       if (!entry) return;
-      redoStack.push({ snap: captureConsole(get()), field: entry.field, at: Date.now() });
-      applyConsole(entry.snap, set, get);
+      redoStack.push(swapEntry(entry, get));
+      applyEntry(entry, set, get);
       set({ undoDepth: undoStack.length, redoDepth: redoStack.length });
     },
 
     redo() {
       const entry = redoStack.pop();
       if (!entry) return;
-      undoStack.push({ snap: captureConsole(get()), field: entry.field, at: Date.now() });
-      applyConsole(entry.snap, set, get);
+      undoStack.push(swapEntry(entry, get));
+      applyEntry(entry, set, get);
       set({ undoDepth: undoStack.length, redoDepth: redoStack.length });
     },
 
     applyPreset(id) {
       const preset = findPreset(get(), id);
       if (!preset) return;
-      record(get, 'preset');
+      record(get, 'preset', { genre: true });
       // Genre tag follows a genre preset (still editable in the export
       // dialog); a user preset restores the genre it was saved with.
       const genre = preset.user ? preset.genre : id === 'flat' ? undefined : preset.genre ?? titleCase(preset.name);
