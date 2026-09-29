@@ -3,7 +3,10 @@
 // (scripts/lib/drive-app.mjs): production build, throwaway profile, muted.
 //
 // Prereq: `npm run build`.
-// Usage:  node scripts/capture-screens.mjs
+// Usage:  node scripts/capture-screens.mjs [shot ...]
+//         shots: 01-console 02-spectrogram 03-adv-eq 05-paper 06-drop
+//         04-diagnosis (default: all; the others still run, unsaved, since
+//         each scene sets up the next)
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,9 +18,11 @@ mkdirSync(OUT, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), 'jmaster-screens-'));
 const song = join(work, 'midnight-static.wav');
 execFileSync(process.execPath, ['scripts/make-demo-song.mjs', song], { stdio: 'inherit' });
+const wanted = new Set(process.argv.slice(2));
 
 const app = await launchApp({ width: 1440, height: 900 });
 const shoot = async (name, { cursor = false } = {}) => {
+  if (wanted.size > 0 && !wanted.has(name)) return;
   if (!cursor) await app.hideCursor();
   await sleep(450);
   writeFileSync(join(OUT, `${name}.png`), await app.screenshot());

@@ -112,7 +112,8 @@ Two bugs during development are worth knowing about because they're classic:
   page lacing, Ogg CRC-32) is written by hand. Zero dependencies.
 - **WAV** (`src/audio/wav.ts`): PCM with TPDF dither and RIFF LIST/INFO
   tags. WAV and FLAC share one quantization pass so both lossless outputs of
-  a render are bit-identical.
+  a render are bit-identical. A drift repair saves as 32-bit IEEE float
+  instead: it is still a source, and a stretch can peak past full scale.
 - **MP3:** lamejs (LGPL), with an in-house ID3v2.3 writer (`src/audio/id3.ts`).
 
 Front-cover art is embedded natively per container: an ID3v2.3 APIC frame
@@ -155,6 +156,31 @@ All in the render worker (`render-worker.ts`):
   more; drift regions are measured against the tempo the track sets out at.
   A drifting track's GRID and CLICK follow the tracked beats (the worklet
   takes them in a `beats` message).
+- **repair** (`src/audio/analysis/repair.ts`): drift repair, a time stretch
+  onto one steady tempo with the pitch left alone (generated tracks drift
+  in tempo only). The warp comes from the tempo curve, not the tracked
+  beats, which jitter too much to steer a stretch: the curve is smoothed
+  with a Gaussian-weighted local line (a plain average would bend a ramp at
+  the ends of the song), integrated into a running beat count, and each
+  output sample maps to the source sample whose count puts it on the target
+  grid. A phase vocoder plays the source along that warp, both channels in
+  one complex FFT. Phases come from phase gradient heap integration (Průša
+  & Holighaus 2017): bins are visited loudest first across this frame and
+  the last, a spectral peak carries on at its own measured frequency, and
+  every other bin takes its rotation from a louder neighbour, so partials
+  stay locked and a transient, loud only in the new frame, keeps its shape.
+  One rotation per bin serves both channels, so the stereo image can't
+  move. No single frame length suits a mix, so a linear-phase split at
+  700 Hz (8191-tap windowed sinc; the bands sum back exactly) gives the
+  lows 4096-point frames (bass partials a few hertz apart stay apart) and
+  the highs 2048 (drum attacks stay sharp). At unity the output is the
+  input (−145 dB). The limit is resolution: two partials closer than about
+  30 Hz (two low bass notes at once) share bins even at 4096 points, and
+  one of them can waver (24.5 cents and −1.4 dB on a 55 + 82.5 Hz test). The stretch runs in a worker of its own, terminated when
+  it lands, is cancelled or a new track loads, so a load never queues behind
+  it. The engine keeps the decoded file for REVERT and the warp for mapping
+  the playhead and loop between the file and its repair; batch and album
+  renders of the loaded track take the repair.
 - **profile:** 30-band average spectrum + side/mid ratio, used by reference
   matching and AUTO-MASTER's genre heuristics.
 - **preview:** full-chain render reduced to overlay peaks + loudness lane.

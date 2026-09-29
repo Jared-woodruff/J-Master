@@ -9,6 +9,7 @@ import { MetersPanel } from './components/MetersPanel';
 import { ExportDialog } from './components/ExportDialog';
 import { BatchDialog } from './components/BatchDialog';
 import { DiagDialog } from './components/DiagDialog';
+import { RepairDialog } from './components/RepairDialog';
 import { MatchDialog } from './components/MatchDialog';
 import { MasterItReport } from './components/MasterItReport';
 import { AlbumDialog } from './components/AlbumDialog';
@@ -22,7 +23,7 @@ import { pickAndLoadFile } from './lib/filepick';
 type State = ReturnType<typeof useStore.getState>;
 
 const anySheetOpen = (s: State) =>
-  s.keysOpen || s.albumOpen || !!s.masterItReport || s.matchOpen || s.diagOpen || s.batchOpen || s.exportOpen;
+  s.keysOpen || s.albumOpen || !!s.masterItReport || s.matchOpen || s.repairOpen || s.diagOpen || s.batchOpen || s.exportOpen;
 
 /**
  * Esc closes the sheet on top (the last one rendered), with the same guard
@@ -34,6 +35,8 @@ function closeTopSheet(s: State): boolean {
   else if (s.albumOpen) { if (s.albumAssembling === null) s.openAlbum(false); }
   else if (s.masterItReport) s.closeMasterItReport();
   else if (s.matchOpen) { if (!s.matchLoading) s.openMatch(false); }
+  // A repair keeps stretching behind a closed sheet (CANCEL REPAIR stops it).
+  else if (s.repairOpen) s.openRepair(false);
   else if (s.diagOpen) s.openDiag(false);
   else if (s.batchOpen) { if (!s.batchRunning) s.openBatch(false); }
   else if (s.exportOpen) { if (s.exporting === null) s.openExport(false); }
@@ -173,6 +176,7 @@ export function App() {
       <ExportDialog />
       <BatchDialog />
       <DiagDialog />
+      <RepairDialog />
       <MatchDialog />
       <MasterItReport />
       <AlbumDialog />

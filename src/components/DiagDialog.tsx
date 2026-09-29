@@ -1,14 +1,14 @@
 // TRACK DIAGNOSIS — the source check sheet. Runs at load; flags common
 // AI-music pathologies (bass in sides, unstable width, image lean, harsh
 // highs, tempo drift) with measured values and one-click fixes where a fix
-// exists, plus the dynamics report (PLR/LRA) and the per-platform delivery
-// table. Nothing is ever applied silently unless the user has armed
-// AUTO-FIX.
+// exists (drift: a repair that stretches the track onto a steady tempo),
+// plus the dynamics report (PLR/LRA) and the per-platform delivery table.
+// Nothing is ever applied silently unless the user has armed AUTO-FIX.
 import { useStore, TEMPO_CHECK } from '../state/store';
 import type { DiagIssue } from '../state/store';
 import type { TempoInfo, TempoDrift } from '../audio/engine';
 import { PLATFORMS } from '../audio/dsp/params';
-import { driftDelta, mmss, slipText } from '../lib/tempo-text';
+import { bpmText, driftDelta, mmss, slipText } from '../lib/tempo-text';
 import { dbtpText, lufsText } from '../lib/level-text';
 import { useSheetFocus } from '../lib/use-sheet-focus';
 
@@ -66,6 +66,11 @@ export function DiagDialog() {
   const bassMono = useStore((s) => s.bassMono);
   const balanceDb = useStore((s) => s.balanceDb);
   const tempo = useStore((s) => s.tempo);
+  const driftRepair = useStore((s) => s.driftRepair);
+  const repairing = useStore((s) => s.repairing);
+  const openRepair = useStore((s) => s.openRepair);
+  const revertRepair = useStore((s) => s.revertRepair);
+  const saveRepairedWav = useStore((s) => s.saveRepairedWav);
 
   const sheetRef = useSheetFocus<HTMLDivElement>(open);
 
@@ -144,7 +149,7 @@ export function DiagDialog() {
           <>
             <div className="boxlabel" style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 10 }}>
               <span className="spec" style={{ color: 'var(--text-body)' }}>TEMPO DRIFT</span>
-              <span className="spec">NO AUDIO FIX · FLAGGED</span>
+              <span className="spec">REPAIRABLE</span>
             </div>
             <DriftChart tempo={tempo} drift={drift} durSec={source.durationSec} />
             <div className="statgrid">
@@ -168,13 +173,59 @@ export function DiagDialog() {
                 <span className="spec-value">{slipText(drift, tempo.bpm)} OFF</span>
               </div>
             </div>
-            <div className="drow" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <span className="spec" style={{ lineHeight: 1.5, whiteSpace: 'normal', minWidth: 0, flex: '1 1 auto' }}>
-                THE GRID AND CLICK NOW FOLLOW THE BEATS. FOR DJ SETS, VIDEO SYNC OR TEMPO-SYNCED
-                EFFECTS, REGENERATE OR WARP TO A FIXED TEMPO FIRST.
-              </span>
-              <button className="btn btn-sm btn-secondary" style={{ flex: 'none' }} onClick={showDrift}>
+            <div className="spec" style={{ lineHeight: 1.5, whiteSpace: 'normal' }}>
+              THE GRID AND CLICK FOLLOW THE BEATS FOR NOW. REPAIR STRETCHES THE TRACK ONTO ONE
+              STEADY TEMPO, PITCH UNCHANGED, READY FOR DJ SETS, VIDEO SYNC AND TEMPO-SYNCED EFFECTS.
+            </div>
+            <div className="drow" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-sm btn-secondary" onClick={showDrift}>
                 SHOW ON WAVEFORM →
+              </button>
+              <button className="btn btn-sm btn-secondary" onClick={() => openRepair(true)}>
+                {repairing ? `REPAIRING · ${Math.round(repairing.pct * 100)}%` : 'REPAIR DRIFT…'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {driftRepair && (
+          <>
+            <div className="boxlabel" style={{ borderTop: '1px solid var(--border-hairline)', paddingTop: 10 }}>
+              <span className="spec" style={{ color: 'var(--text-body)' }}>DRIFT REPAIRED</span>
+              <span className="spec">PITCH UNCHANGED</span>
+            </div>
+            <div className="statgrid">
+              <div className="row">
+                <span className="spec">THE FILE DRIFTED</span>
+                <span className="leader" />
+                <span className="spec-value">{driftRepair.fromBpm.toFixed(1)} → {driftRepair.toBpm.toFixed(1)} BPM</span>
+              </div>
+              <div className="row">
+                <span className="spec">NOW PLAYS AT</span>
+                <span className="leader" />
+                <span className="spec-value" style={{ color: 'var(--text-accent)' }}>
+                  STEADY {bpmText(driftRepair.targetBpm)} BPM
+                </span>
+              </div>
+              <div className="row">
+                <span className="spec">LENGTH</span>
+                <span className="leader" />
+                <span className="spec-value">{mmss(driftRepair.originalDurationSec)} → {mmss(source.durationSec)}</span>
+              </div>
+            </div>
+            <div className="spec" style={{ lineHeight: 1.5, whiteSpace: 'normal' }}>
+              THE REPAIR PLAYS, MASTERS AND EXPORTS IN PLACE OF THE FILE, WHICH IS NOT TOUCHED.
+              SAVE IT AS A 32-BIT FLOAT WAV TO USE ELSEWHERE.
+            </div>
+            <div className="drow" style={{ justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-sm btn-secondary" disabled={!!repairing} onClick={() => void revertRepair()}>
+                REVERT TO THE FILE
+              </button>
+              <button className="btn btn-sm btn-secondary" onClick={() => openRepair(true)}>
+                {repairing ? `REPAIRING · ${Math.round(repairing.pct * 100)}%` : 'CHANGE TEMPO…'}
+              </button>
+              <button className="btn btn-sm btn-secondary" disabled={!!repairing} onClick={() => void saveRepairedWav()}>
+                SAVE WAV…
               </button>
             </div>
           </>

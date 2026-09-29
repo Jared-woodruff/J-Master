@@ -1,4 +1,5 @@
-// 24-bit / 16-bit PCM WAV encoder with TPDF dither and RIFF LIST/INFO tags.
+// 24-bit / 16-bit PCM WAV encoder with TPDF dither and RIFF LIST/INFO tags,
+// and a plain 32-bit float writer for sources.
 // Cover art rides in an "id3 " chunk (an embedded ID3v2.3 tag with an APIC
 // frame), the de-facto standard most players read from WAV.
 import { quantizeStereo } from './flac';
@@ -95,6 +96,45 @@ export function encodeWav(
 ): ArrayBuffer {
   const { qL, qR } = quantizeStereo(L, R, bitDepth);
   return encodeWavFromInt(qL, qR, sampleRate, bitDepth, tags);
+}
+
+/**
+ * 32-bit IEEE float WAV: nothing quantized and nothing clipped, for audio
+ * that is still a source rather than a master (a drift repair can peak
+ * past full scale).
+ */
+export function encodeWavFloat(L: Float32Array, R: Float32Array, sampleRate: number): ArrayBuffer {
+  const frames = L.length;
+  const dataSize = frames * 8;
+  // A non-PCM format carries an 18-byte fmt chunk and a fact chunk.
+  const buf = new ArrayBuffer(58 + dataSize);
+  const view = new DataView(buf);
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 50 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 18, true);
+  view.setUint16(20, 3, true);                 // WAVE_FORMAT_IEEE_FLOAT
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 8, true);
+  view.setUint16(32, 8, true);
+  view.setUint16(34, 32, true);
+  view.setUint16(36, 0, true);                 // no extension
+  writeStr(38, 'fact');
+  view.setUint32(42, 4, true);
+  view.setUint32(46, frames, true);
+  writeStr(50, 'data');
+  view.setUint32(54, dataSize, true);
+  // The samples start at byte 58, off the 4-byte alignment a Float32Array needs.
+  for (let i = 0, off = 58; i < frames; i++, off += 8) {
+    view.setFloat32(off, L[i], true);
+    view.setFloat32(off + 4, R[i], true);
+  }
+  return buf;
 }
 
 function buildInfoChunk(tags?: WavInfoTags): Uint8Array {

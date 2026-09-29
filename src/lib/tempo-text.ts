@@ -8,6 +8,12 @@ export function mmss(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** A tempo as a file name or a toast says it: "138", "138.5". */
+export function bpmText(bpm: number): string {
+  const r = Math.round(bpm * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
 /** "138.0 → 145.9 BPM" */
 export function driftRange(d: TempoDrift): string {
   return `${d.refBpm.toFixed(1)} → ${d.endBpm.toFixed(1)} BPM`;

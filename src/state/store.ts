@@ -11,7 +11,7 @@ import {
 import type { TempoInfo } from '../audio/engine';
 import type { EncodeOptions, ExportFormat, TrackTags } from '../audio/encode';
 import { filePathOf } from '../lib/filepath';
-import { driftRange, mmss } from '../lib/tempo-text';
+import { bpmText, driftRange, mmss } from '../lib/tempo-text';
 
 export interface Toast {
   id: number;
@@ -238,8 +238,16 @@ function deriveDiagnosis(
 
 export const TEMPO_CHECK = 'TEMPO STABILITY';
 
+export interface DriftRepair {
+  targetBpm: number;
+  /** The drift it removed: the tempo the file set out at and ended on. */
+  fromBpm: number;
+  toBpm: number;
+  originalDurationSec: number;
+}
+
 /** The check-sheet row for the tempo analysis. */
-function tempoCheck(t: TempoInfo): DiagCheck {
+function tempoCheck(t: TempoInfo, repair: DriftRepair | null): DiagCheck {
   if (t.drift) {
     return {
       label: TEMPO_CHECK,
@@ -252,7 +260,11 @@ function tempoCheck(t: TempoInfo): DiagCheck {
     return { label: TEMPO_CHECK, spec: 'NO CLEAR PULSE · NOT JUDGED', pass: true };
   }
   const spread = (Math.max(...vals) - Math.min(...vals)) / 2;
-  return { label: TEMPO_CHECK, spec: `STEADY ${t.bpm.toFixed(1)} BPM · ±${spread.toFixed(2)}`, pass: true };
+  return {
+    label: TEMPO_CHECK,
+    spec: `STEADY ${t.bpm.toFixed(1)} BPM · ${repair ? 'DRIFT REPAIRED' : `±${spread.toFixed(2)}`}`,
+    pass: true,
+  };
 }
 
 /**
@@ -263,16 +275,63 @@ function applyTempo(
   t: TempoInfo | null,
   set: (fn: (s: JMasterState) => Partial<JMasterState>) => void,
   get: () => JMasterState,
+  announce = true,
 ): void {
   set((s) => ({
     tempo: t,
-    diagChecks: [...s.diagChecks.filter((c) => c.label !== TEMPO_CHECK), ...(t ? [tempoCheck(t)] : [])],
+    diagChecks: [...s.diagChecks.filter((c) => c.label !== TEMPO_CHECK), ...(t ? [tempoCheck(t, s.driftRepair)] : [])],
   }));
   engine.setClickBeats(t?.drift ? t.beats : null, t?.downbeat ?? 0);
   pushParams(get);
-  if (t?.drift) {
+  if (t?.drift && announce) {
     get().pushToast(`TEMPO DRIFTS ${driftRange(t.drift)} · SEE DIAG`, 'warn');
   }
+}
+
+/**
+ * A different take of the same track now plays (a drift repair, or the
+ * file back again): the source and its checks change, while the console,
+ * the playhead and the loop stay on the same moments of the music.
+ */
+function swapTake(
+  info: SourceInfo,
+  repair: DriftRepair | null,
+  at: { playSec: number; loop: [number, number] | null; playing: boolean },
+  set: (fn: (s: JMasterState) => Partial<JMasterState>) => void,
+  get: () => JMasterState,
+): void {
+  const { issues, checks } = deriveDiagnosis(info.diagnostics, info.balanceOffsetDb);
+  const half = info.durationSec / 2;
+  set((st) => ({
+    source: info,
+    driftRepair: repair,
+    tempo: null,
+    playing: false,
+    playheadSec: at.playSec,
+    loopStartSec: at.loop ? at.loop[0] : null,
+    loopEndSec: at.loop ? at.loop[1] : null,
+    fadeInSec: Math.min(st.fadeInSec, half),
+    fadeOutSec: Math.min(st.fadeOutSec, half),
+    // A check the user unticked stays unticked.
+    diagIssues: issues.map((i) => ({ ...i, checked: st.diagIssues.find((o) => o.id === i.id)?.checked ?? i.checked })),
+    diagChecks: checks,
+  }));
+  // The worklet starts the new take stopped at zero with no loop.
+  engine.seekSec(at.playSec);
+  if (at.loop) engine.setLoop(at.loop[0], at.loop[1]);
+  pushParams(get);
+  if (at.playing) get().togglePlay();
+}
+
+/** Where the listener is, as moments of the file (a repair maps its own times back). */
+function listenerAt(s: JMasterState): { playSec: number; loop: [number, number] | null; playing: boolean } {
+  return {
+    playSec: engine.toOriginalSec(s.playheadSec),
+    loop: s.loopStartSec !== null && s.loopEndSec !== null
+      ? [engine.toOriginalSec(s.loopStartSec), engine.toOriginalSec(s.loopEndSec)]
+      : null,
+    playing: s.playing,
+  };
 }
 
 async function openProject(
@@ -288,6 +347,7 @@ async function openProject(
     const track = proj.track && typeof proj.track.name === 'string'
       ? { name: proj.track.name, path: typeof proj.track.path === 'string' ? proj.track.path : null }
       : null;
+    const repairBpm = cleanRepair(proj.track?.repair);
     // Audio first, so loadFile's per-track resets don't clobber the console.
     pendingProject = null;
     let trackLoaded = false;
@@ -309,7 +369,7 @@ async function openProject(
     // Until its track is loaded, the project keeps that track (a save
     // still names it) and its per-track corrections for when it arrives.
     if (track && !trackLoaded) {
-      pendingProject = { track, balanceDb: projConsole.balanceDb, bassMono: projConsole.bassMono };
+      pendingProject = { track, balanceDb: projConsole.balanceDb, bassMono: projConsole.bassMono, repairBpm };
     }
     const fmt = proj.export?.format;
     const batchDir = typeof proj.batch?.dir === 'string' && !/^[\\/]{2}/.test(proj.batch.dir) ? proj.batch.dir : null;
@@ -356,6 +416,8 @@ async function openProject(
     set({ batchItems: items });
     void scanBatchItems(set as any, get);
     get().pushToast('PROJECT OPENED', 'run');
+    // The same stretch of the same file: the repair comes back exactly.
+    if (trackLoaded && repairBpm !== null) void get().repairDrift(repairBpm);
   } catch {
     get().pushToast('PROJECT FILE UNREADABLE', 'fault');
   }
@@ -447,6 +509,26 @@ function asciiFileName(t: string): string {
     .replace(/[^\x20-\x7e]/g, '_').replace(/[<>:"/\\|?*]/g, '_').trim() || 'Album';
 }
 
+/**
+ * A batch or album track's audio: when it is the loaded track and a drift
+ * repair plays in place of that file, the repair (with its own loudness);
+ * otherwise the file, read and decoded.
+ */
+async function itemAudio(
+  s: JMasterState,
+  src: { path?: string; file?: File },
+  onDecode?: () => void,
+): Promise<{ l: Float32Array; r: Float32Array; durationSec: number; lufs?: number }> {
+  if (s.driftRepair && src.path && src.path === s.trackPath) {
+    const cur = engine.currentAudio();
+    if (cur) return cur;
+  }
+  const bridge = (window as any).jmaster;
+  const bytes: ArrayBuffer = src.path ? await bridge.readFileByPath(src.path) : await src.file!.arrayBuffer();
+  onDecode?.();
+  return engine.decodeOnly(bytes);
+}
+
 /** Latin-1 bytes of text already folded by `cueText`. */
 function latin1(t: string): ArrayBuffer {
   const b = new Uint8Array(t.length);
@@ -513,7 +595,8 @@ interface ProjectFile {
   app: 'J-Master';
   fileVersion: 1;
   savedAt: string;
-  track: { name: string; path: string | null } | null;
+  /** `repair`: a drift repair to re-run on the file when the project opens. */
+  track: { name: string; path: string | null; repair?: { targetBpm: number } } | null;
   console: ConsoleState;
   snapshots: { A: ConsoleSnapshot | null; B: ConsoleSnapshot | null };
   activeSlot: 'A' | 'B';
@@ -540,8 +623,22 @@ function b64ToBytes(b64: string): Uint8Array {
 
 let suppressDiagOnce = false;
 let loadToken = 0;
+/** Bumps per repair and per load: only the latest repair may land or clear the progress. */
+let repairToken = 0;
 /** A project opened without its audio: what to restore once it's loaded. */
-let pendingProject: { track: { name: string; path: string | null }; balanceDb: number; bassMono: boolean } | null = null;
+let pendingProject: {
+  track: { name: string; path: string | null };
+  balanceDb: number;
+  bassMono: boolean;
+  /** The project's drift repair, re-run when its own track arrives. */
+  repairBpm: number | null;
+} | null = null;
+
+/** A drift repair's target from a file: a plain tempo in a sane range, or null. */
+function cleanRepair(raw: unknown): number | null {
+  const bpm = (raw as { targetBpm?: unknown } | null)?.targetBpm;
+  return typeof bpm === 'number' && Number.isFinite(bpm) && bpm >= 40 && bpm <= 300 ? bpm : null;
+}
 
 /** Release tags from a file: strings only, each at most 200 characters. */
 function cleanMeta(raw: unknown): Partial<JMasterState['meta']> {
@@ -631,6 +728,14 @@ interface JMasterState {
   tempo: import('../audio/engine').TempoInfo | null;
   /** A request for the waveform to frame a stretch of the track. */
   waveFocus: { startSec: number; endSec: number; seq: number } | null;
+  /**
+   * The drift repair playing in place of the file (the engine holds both):
+   * the steady tempo, the drift it removed, and the file's own length.
+   */
+  driftRepair: DriftRepair | null;
+  /** A repair being stretched. */
+  repairing: { targetBpm: number; pct: number } | null;
+  repairOpen: boolean;
 
   diagOpen: boolean;
   diagIssues: DiagIssue[];
@@ -698,6 +803,13 @@ interface JMasterState {
   setTempoLane(on: boolean): void;
   /** Frames [startSec, endSec] on the waveform. */
   focusWave(startSec: number, endSec: number): void;
+  openRepair(open: boolean): void;
+  /** Stretches the track onto one steady tempo, pitch unchanged; the file stays for revertRepair. */
+  repairDrift(targetBpm: number): Promise<void>;
+  cancelRepair(): void;
+  revertRepair(): Promise<void>;
+  /** Saves the repaired track as a 32-bit float WAV. */
+  saveRepairedWav(): Promise<void>;
   switchSlot(slot: 'A' | 'B'): void;
   openDiag(open: boolean): void;
   toggleDiagIssue(id: string): void;
@@ -1156,6 +1268,9 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     tempoLane: true,
     tempo: null,
     waveFocus: null,
+    driftRepair: null,
+    repairing: null,
+    repairOpen: false,
     activeSlot: 'A' as const,
     snapshots: { A: null, B: null },
     diagOpen: false,
@@ -1242,6 +1357,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         const { issues, checks } = deriveDiagnosis(source.diagnostics, source.balanceOffsetDb);
         // Fades carry over but never past half of the new track.
         const half = source.durationSec / 2;
+        repairToken++;
         set((st) => ({
           loaded: true, loading: false, loadingName: null, loadPhase: null, source, trackPath: path,
           playing: false, playheadSec: 0,
@@ -1249,15 +1365,19 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           tempo: null, balanceDb: 0, bassMono: false, metronome: false,
           fadeInSec: Math.min(st.fadeInSec, half), fadeOutSec: Math.min(st.fadeOutSec, half),
           diagIssues: issues, diagChecks: checks, diagOpen: false,
+          driftRepair: null, repairing: null, repairOpen: false,
         }));
         // Undo belongs to a track: stepping back past a load would bring
         // the previous track's corrections onto this one.
         undoStack.length = 0;
         redoStack.length = 0;
         set({ undoDepth: 0, redoDepth: 0 });
-        // The track a project was waiting for: its corrections return.
+        // The track a project was waiting for: its corrections return, and
+        // its drift repair too once it is that same file.
+        let pendingRepair: number | null = null;
         if (pendingProject) {
           set({ balanceDb: pendingProject.balanceDb, bassMono: pendingProject.bassMono });
+          if (pendingProject.track.name === name) pendingRepair = pendingProject.repairBpm;
           pendingProject = null;
         }
         if (get().matchRef) void refitMatch(source, set, get);
@@ -1285,6 +1405,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         void engine.requestTempo().then((t) => {
           if (get().source !== source) return;
           applyTempo(t, set, get);
+          if (pendingRepair !== null) void get().repairDrift(pendingRepair);
         });
       } catch (err) {
         if (token !== loadToken) return;
@@ -1546,17 +1667,15 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           if (!src) continue;
           const base = (idx / items.length);
           setPhase(`TRACK ${idx + 1}/${items.length} · RENDERING`, base);
-          const bytes: ArrayBuffer = src.path
-            ? await bridge.readFileByPath(src.path)
-            : await src.file!.arrayBuffer();
-          const { l, r, durationSec } = await engine.decodeOnly(bytes);
+          const audio = await itemAudio(get(), src);
+          const { l, r, durationSec } = audio;
           if (durationSec < CD_MIN_TRACK_SEC) {
             throw new Error(`TRACK ${idx + 1} IS ${durationSec.toFixed(1)} S · CD TRACKS NEED ${CD_MIN_TRACK_SEC}`);
           }
           if (totalSamples / 44100 + durationSec > CD_MAX_SEC) {
             throw new Error(`TRACK ${idx + 1} RUNS PAST 79:57 · WON’T FIT ON A CD`);
           }
-          const lufs = item.lufs ?? (await engine.measureLufs(l, r));
+          const lufs = audio.lufs ?? item.lufs ?? (await engine.measureLufs(l, r));
           const itemParams = trackParams(get(), params, item);
           const rendered = await engine.renderBuffers(
             l, r, itemParams, lufs, durationSec,
@@ -1689,7 +1808,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
           const bpm = tempo?.bpm ?? 0;
           reasons.push(tempo?.drift
             ? `TEMPO ${bpm.toFixed(1)} BPM AVERAGE · DRIFTS ${driftRange(tempo.drift)}`
-            : `TEMPO ${bpm > 0 ? bpm.toFixed(1) + ' BPM' : 'UNCLEAR'}`);
+            : `TEMPO ${bpm > 0 ? bpm.toFixed(1) + ' BPM' : 'UNCLEAR'}${get().driftRepair ? ' · DRIFT REPAIRED' : ''}`);
           reasons.push(`SUB ${subDb >= 0 ? '+' : ''}${subDb.toFixed(1)} dB · BRIGHT ${brightDb >= 0 ? '+' : ''}${brightDb.toFixed(1)} dB · MID ${midDb >= 0 ? '+' : ''}${midDb.toFixed(1)} dB`);
           if (bpm >= 155 && subDb > 2) { presetPick = 'dnb'; reasons.push('FAST + SUB-HEAVY → DRUM & BASS'); }
           else if (bpm >= 118 && bpm <= 138 && subDb > 1.5) { presetPick = 'house'; reasons.push('CLUB TEMPO + SUB → EDM / HOUSE'); }
@@ -1721,7 +1840,7 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         reasons.push(issues.length > 0
           ? `FIXES ${issues.map((i) => i.fixLabel).join(' · ')}`
           : 'SOURCE CHECKS CLEAN · NO FIXES NEEDED');
-        if (tempo?.drift) reasons.push('TEMPO DRIFT FLAGGED · NO AUDIO FIX · SEE DIAG');
+        if (tempo?.drift) reasons.push('TEMPO DRIFT FLAGGED · REPAIR IT IN DIAG');
         set({ masterItReport: { presetName: preset.name, reasons, historyId }, masterItBusy: false });
       } catch {
         set({ masterItBusy: false });
@@ -1923,6 +2042,90 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
 
     focusWave(startSec, endSec) {
       set((s) => ({ waveFocus: { startSec, endSec, seq: (s.waveFocus?.seq ?? 0) + 1 } }));
+    },
+
+    openRepair(open) {
+      set({ repairOpen: open });
+    },
+
+    async repairDrift(targetBpm) {
+      const s = get();
+      if (!s.loaded || !s.source || s.repairing || s.exporting) return;
+      const token = ++repairToken;
+      const at = listenerAt(s);
+      set({ repairing: { targetBpm, pct: 0 } });
+      try {
+        const info = await engine.repairDrift(targetBpm, (pct) => {
+          if (token === repairToken) set({ repairing: { targetBpm, pct } });
+        });
+        if (!info || token !== repairToken) return;
+        const originalDurationSec = engine.repair?.originalDurationSec ?? s.source.durationSec;
+        // The drift it removed, from the file's own analysis (a project
+        // re-running its repair gets here before the store has seen it).
+        const drift = engine.repairBase()?.tempo.drift ?? null;
+        swapTake(info, {
+          targetBpm,
+          fromBpm: drift?.refBpm ?? targetBpm,
+          toBpm: drift?.endBpm ?? targetBpm,
+          originalDurationSec,
+        }, {
+          playSec: engine.toRepairedSec(at.playSec),
+          loop: at.loop ? [engine.toRepairedSec(at.loop[0]), engine.toRepairedSec(at.loop[1])] : null,
+          playing: get().playing,
+        }, set, get);
+        set({ repairOpen: false });
+        get().pushToast(
+          `DRIFT REPAIRED · STEADY ${bpmText(targetBpm)} BPM · ${mmss(originalDurationSec)} → ${mmss(info.durationSec)}`, 'run');
+        void engine.requestTempo().then((t) => {
+          if (get().source === info) applyTempo(t, set, get);
+        });
+      } catch (err) {
+        if (token !== repairToken) return;
+        get().pushToast(`REPAIR FAILED · ${String((err as Error)?.message ?? err).toUpperCase()}`, 'fault');
+      } finally {
+        if (token === repairToken) set({ repairing: null });
+      }
+    },
+
+    cancelRepair() {
+      if (!get().repairing) return;
+      engine.cancelRepair();
+      get().pushToast('REPAIR CANCELLED', 'info');
+    },
+
+    async revertRepair() {
+      const s = get();
+      if (!s.driftRepair || s.repairing || s.exporting) return;
+      const token = ++repairToken;
+      const at = listenerAt(s);
+      try {
+        const info = await engine.revertRepair();
+        if (!info || token !== repairToken) return;
+        swapTake(info, null, { ...at, playing: get().playing }, set, get);
+        // The file's own analysis comes straight back; its drift is known.
+        void engine.requestTempo().then((t) => {
+          if (get().source === info) applyTempo(t, set, get, false);
+        });
+        get().pushToast('DRIFT REPAIR REMOVED · THE FILE PLAYS AGAIN', 'info');
+      } catch (err) {
+        if (token !== repairToken) return;
+        get().pushToast(`REVERT FAILED · ${String((err as Error)?.message ?? err).toUpperCase()}`, 'fault');
+      }
+    },
+
+    async saveRepairedWav() {
+      const s = get();
+      const repair = s.driftRepair;
+      if (!repair || !s.source) return;
+      const data = engine.repairedWav();
+      if (!data) return;
+      const name = `${s.source.name.replace(/\.[^.]+$/, '')} (steady ${bpmText(repair.targetBpm)} BPM).wav`;
+      try {
+        const saved = await saveExportFile(data, name, 'audio/wav');
+        if (saved) get().pushToast(`SAVED ${(saved.split(/[\\/]/).pop() ?? name).toUpperCase()}`, 'run');
+      } catch (err) {
+        get().pushToast(`SAVE FAILED · ${fileErrorText(err)}`, 'fault');
+      }
     },
 
     openDiag(open) {
@@ -2138,7 +2341,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         app: 'J-Master',
         fileVersion: 1,
         savedAt: new Date().toISOString(),
-        track: s.source ? { name: s.source.name, path: s.trackPath } : pendingProject?.track ?? null,
+        track: s.source
+          ? { name: s.source.name, path: s.trackPath, ...(s.driftRepair ? { repair: { targetBpm: s.driftRepair.targetBpm } } : {}) }
+          : pendingProject
+            ? { ...pendingProject.track, ...(pendingProject.repairBpm !== null ? { repair: { targetBpm: pendingProject.repairBpm } } : {}) }
+            : null,
         console: captureConsole(s),
         snapshots: s.snapshots,
         activeSlot: s.activeSlot,
@@ -2189,6 +2396,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
     startExport(fileName, title) {
       const s = get();
       if (!s.loaded || s.loading || s.exporting) return;
+      // The track is about to change under the render.
+      if (s.repairing) {
+        get().pushToast('THE DRIFT REPAIR IS STILL RUNNING · EXPORT WHEN IT LANDS', 'warn');
+        return;
+      }
       set({ exporting: { phase: 'STARTING', pct: 0 }, exportStats: null, exportSavedTo: null, exportExtrasSaved: [] });
       const tags = tagsFrom(s, title);
       const main: EncodeOptions = { ...encodeOptionsFrom(s), tags };
@@ -2379,15 +2591,11 @@ export const useStore = create<JMasterState>()(persist((set, get) => {
         if (!src) continue;
         try {
           patch(item.id, { status: 'working', phase: 'READING', pct: 0.02 });
-          const bytes: ArrayBuffer = src.path
-            ? await bridge.readFileByPath(src.path)
-            : await src.file!.arrayBuffer();
-
-          patch(item.id, { phase: 'DECODING', pct: 0.06 });
-          const { l, r, durationSec } = await engine.decodeOnly(bytes);
+          const audio = await itemAudio(get(), src, () => patch(item.id, { phase: 'DECODING', pct: 0.06 }));
+          const { l, r, durationSec } = audio;
 
           // Reuse the pre-scan's loudness when available.
-          let lufs = item.lufs;
+          let lufs = audio.lufs ?? item.lufs;
           if (lufs === undefined) {
             patch(item.id, { phase: 'ANALYSING', pct: 0.12 });
             lufs = await engine.measureLufs(l, r);

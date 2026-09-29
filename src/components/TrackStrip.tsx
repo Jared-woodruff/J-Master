@@ -1,5 +1,5 @@
 import { useStore } from '../state/store';
-import { driftRange, mmss } from '../lib/tempo-text';
+import { bpmText, driftRange, mmss } from '../lib/tempo-text';
 import { lufsText } from '../lib/level-text';
 
 function fmtTime(sec: number, ms = true): string {
@@ -17,6 +17,8 @@ export function TrackStrip() {
   const bypass = useStore((s) => s.bypass);
   const limiterDelta = useStore((s) => s.limiterDelta);
   const tempo = useStore((s) => s.tempo);
+  const driftRepair = useStore((s) => s.driftRepair);
+  const repairing = useStore((s) => s.repairing);
   const metronome = useStore((s) => s.metronome);
   const setMetronome = useStore((s) => s.setMetronome);
   const diagIssueCount = useStore((s) => s.diagIssues.length + (s.tempo?.drift ? 1 : 0));
@@ -56,7 +58,17 @@ export function TrackStrip() {
         <div className="specs">
           <span className="spec">IN {lufsText(source.lufs)}</span>
           <span className="spec">{(source.originalSampleRate / 1000).toFixed(1)}K{source.originalBitDepth ? `/${source.originalBitDepth}` : ''}→48K</span>
-          {tempo?.drift ? (
+          {repairing ? (
+            <span className="spec" style={{ color: 'var(--text-accent)' }}
+              title="Stretching the track onto a steady tempo · DIAG to follow or cancel">
+              REPAIRING {Math.round(repairing.pct * 100)}%
+            </span>
+          ) : driftRepair && !tempo?.drift ? (
+            <span className="spec" style={{ color: 'var(--text-body)' }}
+              title={`Drift repaired: stretched onto a steady ${bpmText(driftRepair.targetBpm)} BPM, pitch unchanged · DIAG to revert or save it`}>
+              {bpmText(driftRepair.targetBpm)} BPM · REPAIRED
+            </span>
+          ) : tempo?.drift ? (
             <span className="spec" style={{ color: 'var(--warn-500)' }}
               title={`Tempo drifts from ${tempo.drift.refBpm.toFixed(1)} BPM to ${tempo.drift.endBpm.toFixed(1)} from ${mmss(tempo.drift.regions[0]?.startSec ?? 0)} · the grid and CLICK follow the beats · DIAG for detail`}>
               {driftRange(tempo.drift)}

@@ -340,11 +340,13 @@ export function Waveform() {
             cnt++;
           }
           if (cnt === 0) continue;
-          rm = Math.sqrt(rm / cnt);
+          // A float source (or a drift repair) can peak past full scale:
+          // the lane shows full scale and nothing spills into its neighbours.
+          rm = Math.min(1, Math.sqrt(rm / cnt));
           const played = x <= playX;
           ctx.fillStyle = played ? 'rgba(255,77,0,0.42)' : colBar;
-          const y0 = srcMid - mx * srcAmp;
-          const y1 = srcMid - mn * srcAmp;
+          const y0 = srcMid - Math.min(1, mx) * srcAmp;
+          const y1 = srcMid - Math.max(-1, mn) * srcAmp;
           ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0));
           ctx.fillStyle = played ? colSignal : colRms;
           ctx.fillRect(x, srcMid - rm * srcAmp, 1, Math.max(1, rm * 2 * srcAmp));
@@ -702,7 +704,7 @@ export function Waveform() {
         const per = coarse.mins.length / w;
         for (let x = 0; x < w; x += 2) {
           const b = Math.min(coarse.mins.length - 1, Math.floor(x * per));
-          const a = Math.max(Math.abs(coarse.maxs[b]), Math.abs(coarse.mins[b])) * oAmp;
+          const a = Math.min(1, Math.max(Math.abs(coarse.maxs[b]), Math.abs(coarse.mins[b]))) * oAmp;
           ctx.fillRect(x, oMid - a, 2, Math.max(1, a * 2));
         }
         const wx0 = (v.start / d) * w;

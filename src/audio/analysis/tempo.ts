@@ -596,7 +596,7 @@ function tempoCurve(det: Float64Array, period: number, hopSec: number): TempoCur
 }
 
 /** Curve values with NaN gaps bridged linearly and held at the ends. */
-function bridged(values: number[]): number[] | null {
+export function bridged(values: number[]): number[] | null {
   const idx: number[] = [];
   values.forEach((v, i) => { if (Number.isFinite(v)) idx.push(i); });
   if (idx.length === 0) return null;

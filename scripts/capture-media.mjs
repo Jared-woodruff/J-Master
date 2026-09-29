@@ -6,7 +6,7 @@
 //
 // Prereqs: `npm run build`, and ffmpeg on PATH.
 // Usage:   node scripts/capture-media.mjs [scene ...]
-//          scenes: drop split monitor presets auto export (default: all)
+//          scenes: drop split monitor presets auto export repair (default: all)
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -234,6 +234,33 @@ try {
     await sleep(1700);
     encodeGif(await stop(), 'export', { crop: pad(dlg, 14, app), fps: 15 });
     await app.store(`(st().openExport(false), 1)`);
+  }
+
+  // ── 7. repair: an extended take that drifts, stretched steady ──────
+  // Last, since it loads a track of its own.
+  if (want('repair')) {
+    const extended = join(work, 'midnight-static (extended).wav');
+    execFileSync(process.execPath, ['scripts/make-demo-song.mjs', extended, '--drift'], { stdio: 'inherit' });
+    const wave = await app.box('.waveframe');
+    await app.dropFiles([extended], wave.x, wave.y, { ms: 200 });
+    await app.eval(`(async () => { const st = () => window.__jmaster.store.getState();
+      for (let i = 0; i < 200; i++) { if (st().source?.name.includes('extended') && st().tempo) return; await new Promise(r => setTimeout(r, 100)); } })()`);
+    await app.store(`(st().toasts.forEach((t) => st().dismissToast(t.id)), st().setTempoLane(true), st().setGridEnabled(true), 1)`);
+    await settle(app, 800);
+    const stop = await app.record();
+    await sleep(700);
+    await app.clickOn('DIAG', '.trackstrip', { ms: 700 });
+    await sleep(1000);
+    await app.clickOn('REPAIR DRIFT…', '[aria-label="Track diagnosis"]');
+    await sleep(1400);
+    await app.clickOn('REPAIR →', '[aria-label="Repair tempo drift"]');
+    await app.eval(`(async () => { const st = () => window.__jmaster.store.getState();
+      for (let i = 0; i < 600; i++) { if (st().driftRepair && st().tempo && !st().repairing) return; await new Promise(r => setTimeout(r, 100)); } })()`);
+    await sleep(1600);
+    await app.clickOn('DONE', '[aria-label="Track diagnosis"]', { ms: 700 });
+    await app.move(app.width * 0.62, app.height * 0.42, 700);
+    await sleep(2000);
+    encodeGif(await stop(), 'repair', { crop: { x: 0, y: 0, width: app.width, height: app.height }, fps: 12 });
   }
 
   if (app.problems.length) console.log('page problems:\n  ' + app.problems.join('\n  '));

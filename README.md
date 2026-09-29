@@ -165,7 +165,8 @@ to type an exact value, and hover one to learn what it does.
 
 The waveform is a workspace too: wheel-zoom to transient level, drag the fade
 handles (four curve shapes), overlay the bar and beat **GRID** with a
-**CLICK** metronome (both follow the beats when a track drifts), and flip to
+**CLICK** metronome (both follow the beats when a track drifts, until you
+repair it), and flip to
 a log-frequency **spectrogram** that shares the same zoom, grid, playhead
 and loudness lane.
 
@@ -193,6 +194,14 @@ Every load runs a full analysis pass:
   a fixed grid slides off the beat; a **BPM** lane on the waveform shades
   exactly the stretch that drifts, and the GRID and CLICK follow the real
   beats instead of a grid that would slide off them.
+- **Drift repair:** **REPAIR DRIFT** stretches the whole track onto one
+  steady tempo (where the song sets out, its average, or any tempo you
+  type), with pitch and stereo image unchanged, ready for DJ sets, video
+  sync and tempo-synced effects. The dialog shows the new length and how far
+  any part will stretch before anything runs. The repair then plays, masters
+  and exports in place of the file, **REVERT** brings the file back, **SAVE
+  WAV** writes the repair as a 32-bit float WAV, and a project re-runs it
+  when it opens. The file on disk is never touched.
 - **Section detection:** checkerboard novelty over band energies finds the
   boundaries, snaps them to bars (which also anchors bar 1 to the music), and
   labels each section by energy: INTRO, LOW, MID, PEAK, OUTRO.
@@ -211,8 +220,13 @@ Every load runs a full analysis pass:
   curve is applied in one click.
 
 <p align="center">
-  <img src="docs/screenshots/04-diagnosis.png" alt="The track diagnosis sheet flagging tempo drift on an extended take, with its drift chart" width="880"/>
-  <br/><sub>An extended take that runs away: steady at 110.0 BPM, then drifting from 0:17, flagged and charted.</sub>
+  <img src="docs/screenshots/04-diagnosis.png" alt="The track diagnosis sheet flagging tempo drift on an extended take, with its drift chart and the repair" width="880"/>
+  <br/><sub>An extended take that runs away: steady at 110.0 BPM, then drifting from 0:17, flagged, charted and one click from a repair.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/repair.gif" alt="REPAIR DRIFT stretches the drifting take onto a steady 110 BPM; the grid is fixed again" width="880"/>
+  <br/><sub>REPAIR DRIFT: the same take, stretched onto a steady 110 BPM in a few seconds. One fixed grid again, and the file on disk untouched.</sub>
 </p>
 
 <a id="ship"></a>
@@ -314,6 +328,8 @@ scriptable hook (`window.__jmaster`) that drives the real app:
 | BPM detection | 100.05 on a 100.00 BPM test track; 110.01 on the 110.00 BPM demo track; the grid lands within 11 ms of every true beat |
 | Tempo drift detection | a +4% ramp, a +2.5% step and a ±1.2% wobble each flagged where it happens; steady tracks measure within ±0.03 BPM and are never flagged |
 | CLICK follows a drifting track | every click within 1 sample of its tracked beat, accented on the bar |
+| Drift repair lands on the grid | the drift demo (110.0 → 114.2 BPM) repaired to 110: its 145 true beats land within 3.6 ms of a steady 110 BPM grid (median; 9.1 ms at the 95th percentile), and it re-measures as a steady 110.0 BPM |
+| Drift repair leaves the sound alone | a steady song repaired to its own tempo comes back unchanged (−145 dB); a bass note, a chord and a cluster keep every partial's pitch within 0.1 cent and level within 0.2 dB (0.5 dB for a partial right on the 700 Hz band split); loudness moves 0.03 LU on the demo |
 | Section detection | demo track boundaries at 17.5, 34.9, 52.4 and 69.8 s; its bar lines fall at 17.45, 34.91, 52.36 and 69.82 s; the same with 10 s of silence before or 40 s after, and with 2–8 s risers before each change |
 | CD image frame alignment | track 2 INDEX at exactly 00:34:00 for a 32 s track plus a 2 s gap |
 | Balance correction | +2.03 dB measured on a +2.02 dB expected shift |

@@ -798,6 +798,13 @@
   flex: 1;
   min-width: 0;
 }
+.dialog input[type='number'] {
+  height: var(--control-h-md);
+  padding: 0 4px 0 10px;
+  font-size: 13px;
+  width: 88px;
+  flex: none;
+}
 .progress-track { height: 12px; border: 1px solid var(--border-mid); background: var(--surface-inset); position: relative; }
 .progress-fill { position: absolute; inset: 0; right: auto; background: var(--signal-500); transition: width 200ms var(--ease-mech); }
 .statgrid { display: flex; flex-direction: column; gap: 6px; }

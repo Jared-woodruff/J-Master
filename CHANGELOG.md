@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+- **Drift repair.** A drifting track can now be fixed, not just flagged.
+  REPAIR DRIFT in the check sheet stretches the whole track onto one steady
+  tempo: where the song sets out, its average, or any tempo you type. Pitch
+  and stereo image stay exactly where they were. Before anything runs, the
+  dialog shows the new length, how far any part of the song will stretch,
+  and the beats on the new grid. The repair then plays, masters and exports
+  in place of the file (batch and album renders of the loaded track too),
+  the grid and CLICK go back to one fixed tempo, REVERT brings the file
+  back, SAVE WAV writes the repair as a 32-bit float WAV, and a project
+  re-runs the repair when it opens. The file on disk is never touched.
+- How it holds up: the warp is built from the tempo curve integrated into
+  a beat count (tracked beats jitter too much to steer a stretch), and the
+  audio is stretched in two bands, long frames below 700 Hz so bass
+  partials don't beat and short frames above so drum attacks stay sharp.
+  On the drift demo (110.0 → 114.2 BPM) every true beat lands within 9 ms
+  of a steady 110 BPM grid (95th percentile) and the repair re-measures as
+  a steady 110.0 BPM; a steady song "repaired" to its own tempo comes back
+  unchanged (−145 dB).
+
 ## 2.6.0
 - **Tempo drift detection.** Generated tracks often speed up or slow down
   as they play. Every load now measures the tempo through the song, and a

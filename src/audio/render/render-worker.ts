@@ -16,7 +16,8 @@ import { ChainParams, stagingGainDbFor } from '../dsp/params';
 import { encodeAudio, EncodeOptions, QuantCache } from '../encode';
 import { renderMaster } from './master';
 import { fft } from '../dsp/fft';
-import { analyzeTempo } from '../analysis/tempo';
+import { analyzeTempo, type TempoCurve } from '../analysis/tempo';
+import { repairDrift } from '../analysis/repair';
 
 const BLOCK = 4096;
 
@@ -151,7 +152,7 @@ function preview(msg: PreviewMsg): void {
 }
 
 self.onmessage = (e: MessageEvent) => {
-  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg | PrimeMsg | { type: 'unprime' };
+  const msg = e.data as AnalyzeMsg | RenderMsg | CalibrateMsg | SpectrogramMsg | TempoMsg | PreviewMsg | ProfileMsg | PrimeMsg | RepairMsg | { type: 'unprime' };
   if (msg.type === 'analyze') analyze(msg);
   else if (msg.type === 'render') {
     void render(msg).catch((err) => {
@@ -165,7 +166,33 @@ self.onmessage = (e: MessageEvent) => {
   else if (msg.type === 'unprime') unprime();
   else if (msg.type === 'preview') preview(msg);
   else if (msg.type === 'profile') profile(msg);
+  else if (msg.type === 'repair') repair(msg);
 };
+
+// ── drift repair ──────────────────────────────────────────────────────
+// The stretch itself lives in src/audio/analysis/repair.ts.
+interface RepairMsg {
+  type: 'repair';
+  l: ArrayBuffer;
+  r: ArrayBuffer;
+  fs: number;
+  curve: TempoCurve;
+  targetBpm: number;
+}
+
+function repair(msg: RepairMsg): void {
+  // Like the tempo, every request gets exactly one answer.
+  try {
+    let last = -1;
+    const out = repairDrift(new Float32Array(msg.l), new Float32Array(msg.r), msg.fs, msg.curve, msg.targetBpm, (pct) => {
+      const q = Math.floor(pct * 100);
+      if (q !== last) { last = q; post({ type: 'repair-progress', pct }); }
+    });
+    post({ type: 'repaired', l: out.L.buffer, r: out.R.buffer }, [out.L.buffer, out.R.buffer]);
+  } catch (err) {
+    post({ type: 'repaired', failed: true, message: String(err) });
+  }
+}
 
 // ── spectral profile (for reference matching + MASTER IT) ─────────────
 const PROFILE_BANDS = 30;
