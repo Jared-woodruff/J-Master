@@ -484,6 +484,7 @@ node scripts/make-banners.mjs      # animated banners; type set as vector paths
 npm run build
 node scripts/capture-screens.mjs   # screenshots (the report shot needs Microsoft Edge)
 node scripts/capture-media.mjs     # GIFs (needs ffmpeg on PATH)
+node scripts/make-social-preview.mjs  # the repository's social preview card (needs Edge)
 ```
 
 The scripts open the app without taking the keyboard focus, so you can keep
