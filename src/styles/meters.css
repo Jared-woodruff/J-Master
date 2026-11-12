@@ -1,0 +1,233 @@
+/* ── meters rack ───────────────────────────────────────────────────────
+   Everything the rack draws itself. The panel shell (.panel, .panel-head,
+   .meters-body) and the segmented switches (.seg, .mon-seg, .tabseg) come
+   from app.css. Tracks and wells are dark in both themes, so what sits on
+   them (fills, ticks, marks) keeps one set of values; text around them
+   follows the theme.
+
+   This sheet loads ahead of app.css (it is imported by the component), so
+   where it adjusts a rule from there it names enough classes to out-rank it.
+
+   The rack is sized to show everything, analyser included, in the deck of
+   a default window without scrolling: rows are 10 px on a 12 px pitch. */
+
+.mx { container-type: inline-size; container-name: meters; }
+.meters-body.mx { gap: 4px; }
+
+.mx-mon { display: flex; flex-direction: column; gap: 4px; }
+.mx-mon > .seg.mon-seg { height: 20px; }
+/* The platform names in full, or short where the column is at its narrowest. */
+.mx-short { display: none; }
+@container meters (max-width: 227px) {
+  .mx-long { display: none; }
+  .mx-short { display: inline; }
+}
+/* Side by side (see below), each switch has half the rack: short again
+   until that half is wide enough for the full names. */
+@container meters (min-width: 430px) and (max-width: 462px) {
+  .mx-long { display: none; }
+  .mx-short { display: inline; }
+}
+
+/* Narrow (the usual column): one stack. Wide (the rack under the console
+   on a small window): bars on the left, the analyser beside them. */
+.mx-cols { display: flex; flex-direction: column; gap: 4px; flex: 1 0 auto; min-height: 0; }
+.mx-bars, .mx-view { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mx-view { flex: 1 0 auto; padding-top: 5px; border-top: 1px solid var(--border-hairline); }
+.mx-bars > .mx-block:first-child { padding-top: 1px; border-top: none; }
+
+@container meters (min-width: 430px) {
+  .mx-mon { flex-direction: row; gap: 6px; }
+  .mx-mon > .seg { flex: 1 1 0; min-width: 0; }
+  .mx-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    gap: 0 var(--space-4);
+    align-items: stretch;
+  }
+  .mx-view { padding-top: 0; border-top: none; padding-left: var(--space-4); border-left: 1px solid var(--border-hairline); }
+}
+
+/* ── a block: a hairline, then its rows ─────────────────────────────── */
+.mx-block { display: flex; flex-direction: column; gap: 2px; padding-top: 5px; border-top: 1px solid var(--border-hairline); }
+/* Gain reduction and correlation read as one group: no rule between them. */
+.mx-block.tight { padding-top: 1px; border-top: none; }
+.mx-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); min-height: 14px; }
+.mx-name, .mx-aside, .mx-label, .mx-note, .mx-landing, .mx-keys {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.mx-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9.5px;
+  letter-spacing: var(--tracking-spec);
+  color: var(--text-secondary);
+}
+.mx-aside { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 9.5px; letter-spacing: 0.1em; color: var(--text-spec); }
+.mx-aside.warn { color: var(--text-warn); }
+
+.mx-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 40px; align-items: center; gap: 6px; height: 10px; }
+.mx-row.dual { height: 11px; }
+.mx-label { font-size: 9.5px; line-height: 10px; letter-spacing: 0.1em; color: var(--text-spec); }
+.mx-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mx-track {
+  position: relative;
+  height: 10px;
+  background: var(--meter-track);
+  /* The track is dark in both themes, and so is its edge: on paper a light
+     hairline here would cut the bar out of the page. */
+  border: 1px solid var(--well-hair);
+  overflow: hidden;
+}
+.mx-row.thin .mx-track { height: 7px; }
+/* Two sides in one row: left above, right below, a hairline of track between. */
+.mx-row.dual .mx-track { height: 11px; }
+
+/* Fills are scaled, ticks are slid: neither costs a layout per frame. */
+.mx-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--signal-500);
+}
+.mx-fill.neutral { background: var(--graphite-200); }
+.mx-fill.top, .mx-hold.top { bottom: auto; height: 4px; }
+.mx-fill.bottom, .mx-hold.bottom { top: auto; height: 4px; }
+/* Correlation runs out from the centre: right for in phase, left for out. */
+.mx-fill.corr { left: 50%; background: var(--graphite-200); }
+.mx-fill.corr[data-state='neg'] { background: var(--warn-500); }
+
+.mx-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--paper); opacity: 0.75; }
+.mx-notch { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--graphite-600); }
+
+.mx-hold { position: absolute; inset: 0; pointer-events: none; }
+.mx-hold::before { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 2px; background: var(--paper); }
+.mx-hold[data-state='off'] { visibility: hidden; }
+.mx-hold[data-state='over']::before { background: var(--fault-500); }
+
+/* ── the three ratios under the loudness bars ───────────────────────── */
+.mx-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border-hairline);
+  margin-top: 1px;
+}
+.mx-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  height: 19px;
+  padding: 0 5px;
+  line-height: 19px;
+}
+.mx-stat + .mx-stat { border-left: 1px solid var(--border-hairline); }
+.mx-stat .k { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em; color: var(--text-spec); }
+.mx-stat .v {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── the latched true peak: a readout that is also its own reset ────── */
+.mx-latch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--border-mid);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-spec);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
+}
+.mx-latch:hover { background: var(--surface-inset); color: var(--text-body); }
+.mx-latch:active { transform: translateY(var(--press-shift)); }
+.mx-latch b { font-weight: 500; color: var(--text-body); font-variant-numeric: tabular-nums; }
+.mx-latch .lamp { width: 6px; height: 6px; }
+.mx-latch[data-state='run'] .lamp { background: var(--run-500); }
+.mx-latch[data-state='over'] { border-color: var(--fault-500); }
+.mx-latch[data-state='over'] .lamp { background: var(--fault-500); }
+.mx-latch[data-state='over'] .mx-overs { color: var(--text-body); }
+
+/* The line under the correlation meters: there only while the low end is
+   out of phase, saying so in words. */
+.mx-note { font-size: 9px; letter-spacing: 0.1em; line-height: 1.4; color: var(--text-warn); white-space: normal; }
+.mx-note[data-state='rest'] { display: none; }
+
+/* ── the analyser well ──────────────────────────────────────────────── */
+.seg.tabseg.mx-tabs { flex: none; }
+.seg.tabseg.mx-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 4px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mx-well {
+  flex: 1 0 96px;
+  min-height: 96px;
+  position: relative;
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-well);
+  touch-action: none;
+}
+.mx-well canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.mx-well.hover { cursor: crosshair; }
+.mx-well.seek { cursor: pointer; }
+
+.mx-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); min-height: 14px; }
+.mx-keys { display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0; font-size: 9px; letter-spacing: 0.1em; color: var(--text-spec); }
+.mx-key { display: inline-flex; align-items: center; gap: 4px; }
+.mx-key i { display: inline-block; flex: none; width: 9px; height: 0; }
+.mx-key i.bar { width: 7px; height: 7px; background: var(--signal-500); }
+.mx-key i.cap { border-top: 2px solid var(--text-body); }
+.mx-key i.line { border-top: 1px solid var(--text-secondary); }
+.mx-key i.dim { border-top: 1px solid var(--text-disabled); }
+
+.mx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 14px;
+  padding: 0 6px;
+  border: 1px solid var(--border-mid);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--text-spec);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-mech), color var(--dur-fast) var(--ease-mech);
+}
+.mx-chip:hover { background: var(--surface-inset); color: var(--text-body); }
+.mx-chip:active { transform: translateY(var(--press-shift)); }
+.mx-chip .lamp { width: 5px; height: 5px; }
+.mx-chip[aria-pressed='true'] { border-color: var(--signal-500); color: var(--text-body); }
+.mx-chip[aria-pressed='true'] .lamp { background: var(--signal-500); }
+
+/* Where the export lands, in words; wraps rather than run out of the column. */
+.mx-landing { font-size: 9.5px; letter-spacing: 0.08em; line-height: 1.45; color: var(--text-secondary); white-space: normal; }
+.mx-landing b { font-weight: 500; color: var(--text-body); }
+.mx-landing.warn { color: var(--text-warn); }

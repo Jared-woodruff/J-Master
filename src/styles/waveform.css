@@ -1,0 +1,76 @@
+/* ── waveform plate: what sits over the canvas ───────────────────────────
+   The canvas draws the audio; these are the parts you take hold of or tab
+   to. The well is dark in both themes, so everything on it uses the well's
+   own colours. */
+
+/* A drag on the plate is the plate's: never a scroll or a pinch. */
+.waveframe canvas { touch-action: none; }
+
+/* TOP & TAIL: a bracket at each end of what the export keeps. Placed by
+   the draw loop (transform + height), so it tracks zoom and pan exactly. */
+.wtrim {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12px;
+  height: 32px;
+  z-index: 3;
+  cursor: ew-resize;
+  touch-action: none;
+  visibility: hidden;
+  color: var(--graphite-400);
+  transition: color var(--dur-fast) var(--ease-mech);
+}
+/* Easier to catch than it looks: the hit area runs a little past the bracket. */
+.wtrim::before {
+  content: '';
+  position: absolute;
+  inset: -4px -5px;
+}
+.wtrim-bar {
+  position: absolute;
+  inset: 0;
+  border: 2px solid currentColor;
+  background: rgba(10, 11, 13, 0.55);
+}
+.wtrim-start .wtrim-bar { border-right: 0; }
+.wtrim-end .wtrim-bar { border-left: 0; }
+/* Untrimmed, the bracket rests; with a cut made it reads as set. */
+.wtrim.set { color: var(--well-text); }
+.wtrim:hover, .wtrim.active, .wtrim:focus-visible { color: var(--signal-500); }
+.wtrim:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+
+/* The timecode travels with the bracket while it is being moved. */
+.wtrim-label {
+  position: absolute;
+  top: 50%;
+  left: 18px;
+  transform: translateY(-50%);
+  display: none;
+  padding: 3px 6px;
+  border: 1px solid var(--graphite-600);
+  background: var(--graphite-950);
+  color: var(--well-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wtrim-end .wtrim-label { left: auto; right: 18px; }
+/* No room on its own side: the label crosses to the other. */
+.wtrim-start.flip .wtrim-label { left: auto; right: 18px; }
+.wtrim-end.flip .wtrim-label { right: auto; left: 18px; }
+.wtrim.active .wtrim-label, .wtrim:focus-visible .wtrim-label { display: block; }
+
+/* FOLLOW is on but holding off (you moved the view away from the playhead):
+   an open lamp instead of a lit one. */
+.wseg button.on.held {
+  background: var(--surface-control);
+  color: var(--text-accent);
+  outline: 1px solid var(--signal-500);
+  outline-offset: -1px;
+}
+.wseg button.on.held:hover:not(:disabled) { background: var(--surface-inset); color: var(--text-accent); }
+.wseg button.on.held:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
